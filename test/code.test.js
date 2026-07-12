@@ -2,8 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  buildMoodleApiTimesortParams,
   buildNotificationItem,
   countMissingModuleEvents,
+  dateToUnixSeconds,
   dedupeMoodleEvents,
   extractModuleCode,
   formatNotificationBody,
@@ -11,10 +13,16 @@ const {
   formatSyncReport,
   formatCalendarValidationError,
   formatMoodleValidationError,
+  getMatchingDateKey,
+  getMatchingEventKey,
   getMoodleDataSource,
+  getSyncWindowBounds,
   learnModuleNames,
+  mergeMoodleEventSources,
   normalizeMoodleApiEvent,
   normalizeTitleForKey,
+  paginateMoodleApiEventPages,
+  shouldRemoveMissingMoodleEvent,
   parseIcsEvents,
   stripHtml,
   unfoldIcsLines,
@@ -296,4 +304,141 @@ test('buildNotificationItem reads module metadata from calendar resource', () =>
   assert.equal(item.action, 'New');
   assert.equal(item.when, '2026-07-12');
   assert.equal(item.moduleCode, 'MN3043');
+});
+
+test('getSyncWindowBounds matches configured sync dates', () => {
+  const window = getSyncWindowBounds();
+
+  assert.equal(window.start.toISOString(), '2026-07-01T00:00:00.000Z');
+  assert.equal(window.end.toISOString(), '2028-06-30T23:59:59.000Z');
+});
+
+test('buildMoodleApiTimesortParams requests the full sync window', () => {
+  const window = getSyncWindowBounds();
+  const params = buildMoodleApiTimesortParams(window.start, window.end);
+
+  assert.equal(params.timesortfrom, dateToUnixSeconds(window.start));
+  assert.equal(params.timesortto, dateToUnixSeconds(window.end));
+  assert.equal(params.limitnum, 50);
+});
+
+test('paginateMoodleApiEventPages fetches additional pages until the window is exhausted', () => {
+  const window = getSyncWindowBounds();
+  const calls = [];
+  const events = paginateMoodleApiEventPages(function(params) {
+    calls.push(Object.assign({}, params));
+
+    if (!params.aftereventid) {
+      return Array.from({ length: 50 }, function(_, index) {
+        return { id: index + 1, name: 'Event ' + (index + 1) };
+      });
+    }
+
+    if (params.aftereventid === 50) {
+      return [
+        { id: 51, name: 'Event 51' },
+        { id: 52, name: 'Event 52' },
+      ];
+    }
+
+    return [];
+  }, window.start, window.end);
+
+  assert.equal(events.length, 52);
+  assert.equal(calls.length, 2);
+  assert.equal(calls[0].aftereventid, undefined);
+  assert.equal(calls[1].aftereventid, 50);
+});
+
+test('paginateMoodleApiEventPages deduplicates overlapping event ids', () => {
+  const window = getSyncWindowBounds();
+  const events = paginateMoodleApiEventPages(function() {
+    return [
+      { id: 1, name: 'First' },
+      { id: 1, name: 'Duplicate' },
+      { id: 2, name: 'Second' },
+    ];
+  }, window.start, window.end);
+
+  assert.deepEqual(events.map(function(event) { return event.id; }), [1, 2]);
+});
+
+test('getMatchingDateKey treats equivalent instants in a timezone as the same key', () => {
+  const timezone = 'Asia/Colombo';
+  const utcKey = getMatchingDateKey({ dateTime: '2026-07-13T18:29:00Z' }, timezone);
+  const localKey = getMatchingDateKey({ dateTime: '2026-07-13T23:59:00+05:30' }, timezone);
+
+  assert.equal(utcKey, localKey);
+});
+
+test('getMatchingEventKey matches API and Google Calendar title/date variants', () => {
+  const timezone = 'Asia/Colombo';
+  const apiStyle = getMatchingEventKey({
+    summary: '[CS3621 Data Mining] Pattern Mining Assignment closes',
+    start: { dateTime: '2026-07-13T18:29:00Z' },
+  }, timezone);
+  const calendarStyle = getMatchingEventKey({
+    summary: '[CS3621 Data Mining] Pattern Mining Assignment closes',
+    start: { dateTime: '2026-07-13T23:59:00+05:30' },
+  }, timezone);
+
+  assert.equal(apiStyle, calendarStyle);
+});
+
+test('mergeMoodleEventSources prefers API events and keeps iCal-only events', () => {
+  const props = mockProps({
+    TIMEZONE: 'Asia/Colombo',
+    MODULE_NAMES: '{"CS3621":"Data Mining","CS3501":"Data Science and Engineering Project"}',
+  });
+  const apiResult = {
+    hashInput: 'api',
+    rawEvents: [{
+      uid: 'api:1@online.uom.lk',
+      summary: 'Pattern Mining Assignment closes',
+      start: { dateTime: '2026-07-13T18:29:00Z', dateOnly: false },
+      courseShortName: 'In23-S5-CS3621',
+    }],
+  };
+  const icalResult = {
+    hashInput: 'ical',
+    rawEvents: [
+      {
+        uid: 'one@online.uom.lk',
+        summary: 'Pattern Mining Assignment closes',
+        start: { dateTime: '2026-07-13T23:59:00+05:30', dateOnly: false },
+      },
+      {
+        uid: 'two@online.uom.lk',
+        summary: 'Attendance',
+        start: { dateTime: '2026-07-10T18:30:00Z', dateOnly: false },
+        courseFullName: 'In23-S5-CS3501 - Data Science and Engineering Project',
+      },
+    ],
+  };
+  const merged = mergeMoodleEventSources(apiResult, icalResult, props);
+
+  assert.equal(merged.rawEvents.length, 2);
+  assert.equal(merged.rawEvents.some(function(event) { return event.uid === 'api:1@online.uom.lk'; }), true);
+  assert.equal(merged.rawEvents.some(function(event) { return event.summary === 'Attendance'; }), true);
+});
+
+test('shouldRemoveMissingMoodleEvent keeps iCal-synced events during API-only sync', () => {
+  assert.equal(
+    shouldRemoveMissingMoodleEvent(
+      { uid: 'abc@online.uom.lk', key: 'attendance|2026-07-10T00:00' },
+      {},
+      {},
+      { dataSource: 'api', supplementWithIcal: false }
+    ),
+    false
+  );
+  assert.equal(
+    shouldRemoveMissingMoodleEvent(
+      { uid: 'api:99@online.uom.lk', key: 'old assignment|2026-07-01T23:59' },
+      {},
+      {},
+      { dataSource: 'api', supplementWithIcal: true }
+    ),
+    true
+  );
 });

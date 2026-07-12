@@ -133,6 +133,8 @@ TIMEZONE            Asia/Colombo
 
 API mode is recommended because Moodle returns course metadata with events. This lets the script automatically add module codes/names to generic events such as `Attendance`.
 
+Keep `MOODLE_ICAL_URL` set even in API mode. The script uses it as a supplement for calendar entries that Moodle action events do not return, such as `Attendance`.
+
 Fallback iCal setup:
 
 ```text
@@ -262,14 +264,19 @@ curl -G 'https://online.uom.lk/webservice/rest/server.php' \
   --data-urlencode 'moodlewsrestformat=json'
 ```
 
-Test action events:
+Test action events for the sync window:
 
 ```bash
 curl -G 'https://online.uom.lk/webservice/rest/server.php' \
   --data-urlencode 'wstoken=YOUR_TOKEN' \
   --data-urlencode 'wsfunction=core_calendar_get_action_events_by_timesort' \
+  --data-urlencode 'timesortfrom=1782864000' \
+  --data-urlencode 'timesortto=1845993599' \
+  --data-urlencode 'limitnum=50' \
   --data-urlencode 'moodlewsrestformat=json'
 ```
+
+API mode paginates through Moodle action events for the configured sync window (`2026-07-01` to `2028-06-30`) instead of using Moodle's default 20-event response. When `MOODLE_ICAL_URL` is also set, API mode merges iCal-only events such as `Attendance` into the same sync feed.
 
 ### 8. Push code
 
