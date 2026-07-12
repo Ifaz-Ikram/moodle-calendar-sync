@@ -23,6 +23,12 @@ function syncMoodleCalendar() {
   const icsText = fetchIcs(icalUrl);
   const rawMoodleEvents = parseIcsEvents(icsText);
   const moodleEvents = dedupeMoodleEvents(rawMoodleEvents);
+  const learnedModuleNames = learnModuleNames(rawMoodleEvents);
+  Object.keys(learnedModuleNames).forEach(function(code) {
+    if (!moduleNames[code]) {
+      moduleNames[code] = learnedModuleNames[code];
+    }
+  });
   const moodleVisibleKeys = getMoodleVisibleKeys(moodleEvents, moduleOverrides, moduleNames, timezone);
   const moodleUids = getMoodleUids(moodleEvents);
   const now = new Date(SYNC_START_DATE + 'T00:00:00Z');
@@ -93,6 +99,12 @@ function cleanupMoodleCalendarDuplicates() {
 
   const rawMoodleEvents = parseIcsEvents(fetchIcs(icalUrl));
   const moodleEvents = dedupeMoodleEvents(rawMoodleEvents);
+  const learnedModuleNames = learnModuleNames(rawMoodleEvents);
+  Object.keys(learnedModuleNames).forEach(function(code) {
+    if (!moduleNames[code]) {
+      moduleNames[code] = learnedModuleNames[code];
+    }
+  });
   const moodleVisibleKeys = getMoodleVisibleKeys(moodleEvents, moduleOverrides, moduleNames, timezone);
   const now = new Date(SYNC_START_DATE + 'T00:00:00Z');
   const horizon = new Date(SYNC_END_DATE + 'T23:59:59Z');
@@ -124,6 +136,18 @@ function inspectAmbiguousMoodleEvents() {
       );
     }
   });
+}
+
+function inspectLearnedModuleNames() {
+  const props = PropertiesService.getScriptProperties();
+  const icalUrl = props.getProperty(PROP_MOODLE_ICAL_URL);
+
+  if (!icalUrl) {
+    throw new Error('Missing script property: ' + PROP_MOODLE_ICAL_URL);
+  }
+
+  const names = learnModuleNames(parseIcsEvents(fetchIcs(icalUrl)));
+  Logger.log(JSON.stringify(names, null, 2));
 }
 
 function fetchIcs(url) {
@@ -198,6 +222,51 @@ function getMoodleUids(events) {
     }
   });
   return uids;
+}
+
+function learnModuleNames(events) {
+  const names = {};
+
+  events.forEach(function(event) {
+    [
+      event.summary || '',
+      event.description || '',
+      event.location || '',
+      event.url || '',
+    ].forEach(function(value) {
+      collectModuleNamesFromText(value, names);
+    });
+  });
+
+  return names;
+}
+
+function collectModuleNamesFromText(value, names) {
+  const text = String(value).replace(/\s+/g, ' ');
+  const patterns = [
+    /\b(?:In\d{2}-S\d-)?([A-Z]{2,4})\s?(\d{4})\s*-\s*([^()[\]\n\r|]+)/g,
+    /\b([A-Z]{2,4})\s?(\d{4})\s+([^()[\]\n\r|]+?)(?:\s+\([A-Z &]+\)|$)/g,
+  ];
+
+  patterns.forEach(function(pattern) {
+    let match;
+    while ((match = pattern.exec(text)) !== null) {
+      const code = match[1] + match[2];
+      const name = cleanModuleName(match[3]);
+      if (name && !names[code]) {
+        names[code] = name;
+      }
+    }
+  });
+}
+
+function cleanModuleName(value) {
+  return String(value)
+    .replace(/\s+-\s+Dr\..*$/i, '')
+    .replace(/\s+Dr\..*$/i, '')
+    .replace(/\s+\([A-Z &]+\).*$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function unfoldIcsLines(icsText) {

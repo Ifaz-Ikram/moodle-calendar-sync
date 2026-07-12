@@ -19,7 +19,7 @@ It does not need a server, database, or paid hosting. Apps Script runs the sync 
 - Updates existing Google Calendar events when Moodle changes them.
 - Removes synced Google Calendar events that disappear from the Moodle feed.
 - Deduplicates repeated Moodle events.
-- Adds module codes and module names where possible.
+- Learns module names from Moodle event titles/descriptions where possible.
 - Supports manual module overrides for generic Moodle titles such as `Attendance`.
 - Stores Moodle and Google Calendar configuration in Apps Script Script Properties, not in source code.
 
@@ -104,7 +104,9 @@ Use `primary` to sync into your main Google Calendar. To sync into a separate ca
 
 ### 6. Add module names
 
-Add a Script Property:
+The script can automatically learn many module names from Moodle entries such as `CS3621 Data Mining (L)` or `In23-S5-MA3024 - Numerical Methods`.
+
+If you want to provide or override names manually, add a Script Property:
 
 ```text
 MODULE_NAMES
@@ -152,6 +154,8 @@ Example value:
 ```
 
 Use `byTitle` when every event with that title belongs to the same module. Use `byUid` when only one specific Moodle event should be mapped.
+
+This part cannot be fully automated from iCal alone when Moodle omits the course/module from the feed. For full automation of ambiguous items, the project would need Moodle API access or a browser extension that can read the logged-in Moodle page.
 
 ### 8. Push code
 
@@ -206,6 +210,10 @@ Run this manually if your calendar already contains duplicates.
 Logs Moodle events where the module code cannot be inferred.
 
 Use this to find UIDs for `MODULE_OVERRIDES`.
+
+### `inspectLearnedModuleNames`
+
+Logs module names that the script can infer automatically from the Moodle feed.
 
 ## Known Limitations
 
