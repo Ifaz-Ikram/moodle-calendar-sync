@@ -5,8 +5,10 @@ const {
   dedupeMoodleEvents,
   extractModuleCode,
   learnModuleNames,
+  normalizeMoodleApiEvent,
   normalizeTitleForKey,
   parseIcsEvents,
+  stripHtml,
   unfoldIcsLines,
 } = require('../Code.js');
 
@@ -130,4 +132,47 @@ test('normalizeTitleForKey ignores existing module prefixes', () => {
     normalizeTitleForKey('[CS3501] Attendance'),
     'attendance'
   );
+});
+
+test('normalizeMoodleApiEvent maps Moodle API course fields', () => {
+  const event = normalizeMoodleApiEvent({
+    id: 6779111,
+    name: 'About me (Questionnaire Opens)',
+    description: '<p>About me</p>',
+    timestart: 1737966600,
+    timeduration: 3600,
+    url: 'https://online.uom.lk/mod/questionnaire/view.php?id=445181',
+    course: {
+      id: 27059,
+      fullname: 'In23-S3-CS2953 - Communication Skills',
+      shortname: 'In23-S3-CS2953 (124337)',
+    },
+  }, 'https://online.uom.lk');
+
+  assert.equal(event.uid, 'api:6779111@online.uom.lk');
+  assert.equal(event.summary, 'About me (Questionnaire Opens)');
+  assert.equal(event.description, 'About me');
+  assert.equal(event.courseFullName, 'In23-S3-CS2953 - Communication Skills');
+  assert.equal(event.courseShortName, 'In23-S3-CS2953 (124337)');
+  assert.equal(event.start.dateTime, '2025-01-27T08:30:00Z');
+  assert.equal(event.end.dateTime, '2025-01-27T09:30:00Z');
+});
+
+test('API course fields allow automatic module extraction and learning', () => {
+  const event = {
+    uid: 'api:1@online.uom.lk',
+    summary: 'Attendance',
+    courseFullName: 'In23-S5-MN3043 - Business Economics and Financial Accounting',
+    courseShortName: 'In23-S5-MN3043 (33105)',
+  };
+
+  assert.equal(extractModuleCode(event, { byUid: {}, byTitle: {} }), 'MN3043');
+  assert.equal(
+    learnModuleNames([event]).MN3043,
+    'Business Economics and Financial Accounting'
+  );
+});
+
+test('stripHtml removes tags and decodes common entities', () => {
+  assert.equal(stripHtml('<p>A&amp;B &lt; C</p>'), 'A&B < C');
 });

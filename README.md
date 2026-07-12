@@ -27,6 +27,7 @@ It does not need a server, database, or paid hosting. Apps Script runs the sync 
 - Adds default popup reminders to Moodle deadlines.
 - Includes a configuration validator for setup troubleshooting.
 - Provides a dry-run sync preview.
+- Can use Moodle Web Services API for better course/module metadata.
 - Supports manual module overrides for generic Moodle titles such as `Attendance`.
 - Stores Moodle and Google Calendar configuration in Apps Script Script Properties, not in source code.
 
@@ -58,7 +59,7 @@ npx clasp open-script
 Then in Apps Script:
 
 1. Enable the advanced `Calendar` service.
-2. Add `MOODLE_ICAL_URL` and `TIMEZONE` in Script Properties.
+2. Add either iCal or API Script Properties plus `TIMEZONE`.
 3. Run `validateConfig`.
 4. Run `setupMoodleCalendar`.
 5. Run `dryRunSyncMoodleCalendar`.
@@ -128,6 +129,17 @@ MOODLE_ICAL_URL     <your private Moodle calendar URL>
 TIMEZONE            Asia/Colombo
 ```
 
+For Moodle API mode, add:
+
+```text
+MOODLE_DATA_SOURCE  api
+MOODLE_API_BASE     https://online.uom.lk
+MOODLE_TOKEN        <your Moodle web service token>
+TIMEZONE            Asia/Colombo
+```
+
+Keep `MOODLE_ICAL_URL` as a fallback if you want, but do not put either token in source code.
+
 Optional:
 
 ```text
@@ -152,7 +164,10 @@ Use `primary` only if you intentionally want Moodle events in your main Google C
 
 | Property | Required | Example | Purpose |
 | --- | --- | --- | --- |
-| `MOODLE_ICAL_URL` | Yes | `https://.../calendar/export_execute.php?...` | Private Moodle iCal feed URL. |
+| `MOODLE_DATA_SOURCE` | No | `ical` or `api` | Selects Moodle data source. Defaults to `ical`. |
+| `MOODLE_ICAL_URL` | For iCal mode | `https://.../calendar/export_execute.php?...` | Private Moodle iCal feed URL. |
+| `MOODLE_API_BASE` | For API mode | `https://online.uom.lk` | Moodle site base URL. |
+| `MOODLE_TOKEN` | For API mode | `<token>` | Moodle web service token. Never commit this. |
 | `TIMEZONE` | Recommended | `Asia/Colombo` | Timezone for Google Calendar event times. |
 | `MOODLE_CALENDAR_ID` | No | `primary` or `abc@group.calendar.google.com` | Target Google Calendar. Set automatically by `setupMoodleCalendar`. |
 | `MOODLE_CALENDAR_NAME` | No | `Moodle Deadlines` | Calendar name used by `setupMoodleCalendar`. |
@@ -163,6 +178,8 @@ Use `primary` only if you intentionally want Moodle events in your main Google C
 ### 6. Add module names
 
 The script can automatically learn many module names from Moodle entries such as `CS3621 Data Mining (L)` or `In23-S5-MA3024 - Numerical Methods`.
+
+API mode usually gives better module details because Moodle returns `course.fullname` and `course.shortname` with each action event.
 
 If you want to provide or override names manually, add a Script Property:
 
@@ -215,6 +232,41 @@ Use `byTitle` when every event with that title belongs to the same module. Use `
 
 This part cannot be fully automated from iCal alone when Moodle omits the course/module from the feed. For full automation of ambiguous items, the project would need Moodle API access or a browser extension that can read the logged-in Moodle page.
 
+If `MOODLE_DATA_SOURCE=api` works for your Moodle site, many `MODULE_OVERRIDES` entries become unnecessary because the API includes course metadata.
+
+### Moodle API token check
+
+If your Moodle mobile app works, your site may allow Moodle Web Services API access.
+
+Get a token locally:
+
+```bash
+curl -G 'https://online.uom.lk/login/token.php' \
+  --data-urlencode 'service=moodle_mobile_app' \
+  --data-urlencode 'username=YOUR_USERNAME' \
+  --data-urlencode 'password=YOUR_PASSWORD'
+```
+
+Do not paste the returned token into chat, screenshots, or Git.
+
+Test the token:
+
+```bash
+curl -G 'https://online.uom.lk/webservice/rest/server.php' \
+  --data-urlencode 'wstoken=YOUR_TOKEN' \
+  --data-urlencode 'wsfunction=core_webservice_get_site_info' \
+  --data-urlencode 'moodlewsrestformat=json'
+```
+
+Test action events:
+
+```bash
+curl -G 'https://online.uom.lk/webservice/rest/server.php' \
+  --data-urlencode 'wstoken=YOUR_TOKEN' \
+  --data-urlencode 'wsfunction=core_calendar_get_action_events_by_timesort' \
+  --data-urlencode 'moodlewsrestformat=json'
+```
+
 ### 8. Push code
 
 ```bash
@@ -235,7 +287,7 @@ In Apps Script, select and run:
 validateConfig
 ```
 
-This checks required Script Properties, JSON formatting, Moodle feed access, Google Calendar access, reminders, and whether a sync trigger is installed.
+This checks required Script Properties, JSON formatting, Moodle data-source access, Google Calendar access, reminders, and whether a sync trigger is installed.
 
 ### 11. Create the Moodle calendar
 
@@ -318,7 +370,7 @@ Creates or reuses a Google Calendar named `Moodle Deadlines` and stores its cale
 
 ### `validateConfig`
 
-Checks Script Properties, Moodle iCal access, Google Calendar access, reminder configuration, and trigger presence.
+Checks Script Properties, Moodle data-source access, Google Calendar access, reminder configuration, and trigger presence.
 
 ### `cleanupPrimaryMoodleEvents`
 
@@ -364,6 +416,7 @@ Logs module names that the script can infer automatically from the Moodle feed.
 
 - Moodle iCal feeds may omit course/module details for generic events.
 - If Moodle does not expose module details in iCal, this script cannot infer them without `MODULE_OVERRIDES`.
+- Moodle API mode requires a valid Moodle web service token.
 - Google Calendar may take a short time to visually refresh after bulk updates/deletes.
 - Very frequent triggers can hit Apps Script or Google Calendar rate limits.
 

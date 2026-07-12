@@ -1,6 +1,9 @@
 const PROP_MOODLE_ICAL_URL = 'MOODLE_ICAL_URL';
 const PROP_MOODLE_CALENDAR_ID = 'MOODLE_CALENDAR_ID';
 const PROP_MOODLE_CALENDAR_NAME = 'MOODLE_CALENDAR_NAME';
+const PROP_MOODLE_API_BASE = 'MOODLE_API_BASE';
+const PROP_MOODLE_TOKEN = 'MOODLE_TOKEN';
+const PROP_MOODLE_DATA_SOURCE = 'MOODLE_DATA_SOURCE';
 const PROP_TIMEZONE = 'TIMEZONE';
 const PROP_MODULE_OVERRIDES = 'MODULE_OVERRIDES';
 const PROP_MODULE_NAMES = 'MODULE_NAMES';
@@ -9,6 +12,9 @@ const PROP_LAST_SYNC_HASH = 'LAST_SYNC_HASH';
 const SYNC_TAG = 'MOODLE_SYNC_UID';
 const SOURCE_NAME = 'moodle-calendar-sync';
 const DEFAULT_MOODLE_CALENDAR_NAME = 'Moodle Deadlines';
+const DEFAULT_MOODLE_API_BASE = 'https://online.uom.lk';
+const DATA_SOURCE_API = 'api';
+const DATA_SOURCE_ICAL = 'ical';
 const DEFAULT_REMINDER_MINUTES = [10080, 2880, 360];
 const SYNC_TRIGGER_HANDLER = 'syncMoodleCalendar';
 const SYNC_START_DATE = '2026-07-01';
@@ -48,31 +54,28 @@ function setupHourlyTrigger() {
 function validateConfig() {
   const props = PropertiesService.getScriptProperties();
   const icalUrl = props.getProperty(PROP_MOODLE_ICAL_URL);
+  const dataSource = getMoodleDataSource(props);
   const calendarId = props.getProperty(PROP_MOODLE_CALENDAR_ID) || 'primary';
   const timezone = props.getProperty(PROP_TIMEZONE) || Session.getScriptTimeZone();
 
   Logger.log('Validating Moodle Calendar Sync configuration...');
-  validateRequiredProperty(PROP_MOODLE_ICAL_URL, icalUrl);
+  if (dataSource === DATA_SOURCE_API) {
+    validateRequiredProperty(PROP_MOODLE_TOKEN, props.getProperty(PROP_MOODLE_TOKEN));
+  } else {
+    validateRequiredProperty(PROP_MOODLE_ICAL_URL, icalUrl);
+  }
   validateJsonProperty(PROP_MODULE_NAMES, props.getProperty(PROP_MODULE_NAMES), 'object');
   validateJsonProperty(PROP_MODULE_OVERRIDES, props.getProperty(PROP_MODULE_OVERRIDES), 'object');
   validateJsonProperty(PROP_REMINDER_MINUTES, props.getProperty(PROP_REMINDER_MINUTES), 'array');
 
-  const response = UrlFetchApp.fetch(icalUrl, {
-    muteHttpExceptions: true,
-    followRedirects: true,
-  });
-  const code = response.getResponseCode();
-  if (code < 200 || code >= 300) {
-    throw new Error('Moodle iCal fetch failed. HTTP ' + code);
-  }
-  const icsText = response.getContentText();
-  const events = parseIcsEvents(icsText);
-  Logger.log('Moodle iCal fetch OK. Parsed events: %s', events.length);
+  const source = loadMoodleEvents(props);
+  Logger.log('Moodle %s fetch OK. Parsed events: %s', source.source, source.rawEvents.length);
 
   const calendar = Calendar.Calendars.get(calendarId);
   Logger.log('Google Calendar access OK: %s (%s)', calendar.summary, calendar.id);
   Logger.log('Timezone: %s', timezone);
   Logger.log('Reminder minutes: %s', JSON.stringify(getReminderMinutes(props)));
+  Logger.log('Moodle data source: %s', dataSource);
   Logger.log('Sync trigger installed: %s', hasSyncTrigger() ? 'yes' : 'no');
   Logger.log('Configuration validation complete.');
 }
@@ -179,18 +182,14 @@ function syncMoodleCalendarInternal(options) {
   const moduleNames = getModuleNames(props);
   const reminderMinutes = getReminderMinutes(props);
 
-  if (!icalUrl) {
-    throw new Error('Missing script property: ' + PROP_MOODLE_ICAL_URL);
-  }
-
-  const icsText = fetchIcs(icalUrl);
-  const syncHash = createSyncHash(icsText, moduleOverrides, moduleNames, reminderMinutes);
+  const source = loadMoodleEvents(props);
+  const syncHash = createSyncHash(source.hashInput, moduleOverrides, moduleNames, reminderMinutes, source.source);
   if (!force && props.getProperty(PROP_LAST_SYNC_HASH) === syncHash) {
     Logger.log('Moodle sync skipped. Feed and module configuration unchanged.');
     return;
   }
 
-  const rawMoodleEvents = parseIcsEvents(icsText);
+  const rawMoodleEvents = source.rawEvents;
   const moodleEvents = dedupeMoodleEvents(rawMoodleEvents);
   const learnedModuleNames = learnModuleNames(rawMoodleEvents);
   Object.keys(learnedModuleNames).forEach(function(code) {
@@ -265,7 +264,7 @@ function syncMoodleCalendarInternal(options) {
   if (!dryRun) {
     props.setProperty(PROP_LAST_SYNC_HASH, syncHash);
   }
-  Logger.log('%s complete. Created: %s, updated: %s, unchanged: %s, skipped: %s, deleted duplicates: %s, removed missing: %s, source events: %s, deduped events: %s', dryRun ? 'Moodle dry run' : 'Moodle sync', created, updated, unchanged, skipped, duplicateDeletes, removedMissing, rawMoodleEvents.length, moodleEvents.length);
+  Logger.log('%s complete. Source: %s, created: %s, updated: %s, unchanged: %s, skipped: %s, deleted duplicates: %s, removed missing: %s, source events: %s, deduped events: %s', dryRun ? 'Moodle dry run' : 'Moodle sync', source.source, created, updated, unchanged, skipped, duplicateDeletes, removedMissing, rawMoodleEvents.length, moodleEvents.length);
 }
 
 function cleanupMoodleCalendarDuplicates() {
@@ -359,6 +358,103 @@ function findOrCreateCalendar(calendarName, timezone) {
   });
 }
 
+function loadMoodleEvents(props) {
+  const dataSource = getMoodleDataSource(props);
+  if (dataSource === DATA_SOURCE_API) {
+    return loadMoodleApiEvents(props);
+  }
+  return loadMoodleIcsEvents(props);
+}
+
+function loadMoodleIcsEvents(props) {
+  const icalUrl = props.getProperty(PROP_MOODLE_ICAL_URL);
+  if (!icalUrl) {
+    throw new Error('Missing script property: ' + PROP_MOODLE_ICAL_URL);
+  }
+
+  const icsText = fetchIcs(icalUrl);
+  return {
+    source: DATA_SOURCE_ICAL,
+    hashInput: icsText,
+    rawEvents: parseIcsEvents(icsText),
+  };
+}
+
+function loadMoodleApiEvents(props) {
+  const apiBase = getMoodleApiBase(props);
+  const token = props.getProperty(PROP_MOODLE_TOKEN);
+  if (!token) {
+    throw new Error('Missing script property: ' + PROP_MOODLE_TOKEN);
+  }
+
+  const payload = callMoodleApi(apiBase, token, 'core_calendar_get_action_events_by_timesort', {});
+  const apiEvents = payload.events || [];
+  return {
+    source: DATA_SOURCE_API,
+    hashInput: JSON.stringify(apiEvents),
+    rawEvents: apiEvents.map(function(event) {
+      return normalizeMoodleApiEvent(event, apiBase);
+    }),
+  };
+}
+
+function callMoodleApi(apiBase, token, wsfunction, params) {
+  const query = Object.assign({}, params || {}, {
+    wstoken: token,
+    wsfunction: wsfunction,
+    moodlewsrestformat: 'json',
+  });
+  const url = apiBase.replace(/\/$/, '') + '/webservice/rest/server.php?' + toQueryString(query);
+  const response = UrlFetchApp.fetch(url, {
+    muteHttpExceptions: true,
+    followRedirects: true,
+  });
+  const code = response.getResponseCode();
+  if (code < 200 || code >= 300) {
+    throw new Error('Moodle API call failed. HTTP ' + code);
+  }
+
+  const body = response.getContentText();
+  const json = JSON.parse(body);
+  if (json.exception || json.errorcode || json.error) {
+    throw new Error('Moodle API error: ' + (json.message || json.error || json.errorcode));
+  }
+  return json;
+}
+
+function normalizeMoodleApiEvent(apiEvent, apiBase) {
+  const course = apiEvent.course || {};
+  const start = apiEvent.timestart || apiEvent.timesort;
+  const duration = apiEvent.timeduration || 0;
+  const end = duration > 0 ? start + duration : start;
+  const url = apiEvent.url || (apiEvent.action && apiEvent.action.url) || apiEvent.viewurl || '';
+
+  return {
+    uid: 'api:' + apiEvent.id + '@' + apiBase.replace(/^https?:\/\//, '').replace(/\/$/, ''),
+    summary: stripHtml(apiEvent.name || apiEvent.activityname || 'Moodle event'),
+    description: stripHtml(apiEvent.description || ''),
+    location: stripHtml(apiEvent.location || ''),
+    url: url,
+    start: unixTimestampToParsedDate(start),
+    end: unixTimestampToParsedDate(end),
+    courseFullName: stripHtml(course.fullname || course.fullnamedisplay || ''),
+    courseShortName: stripHtml(course.shortname || ''),
+    courseId: course.id || '',
+    component: apiEvent.component || '',
+    moduleName: apiEvent.modulename || '',
+    eventType: apiEvent.eventtype || '',
+    actionName: apiEvent.action && apiEvent.action.name ? apiEvent.action.name : '',
+  };
+}
+
+function unixTimestampToParsedDate(timestamp) {
+  const date = new Date(Number(timestamp) * 1000);
+  return {
+    dateTime: date.toISOString().replace('.000Z', 'Z'),
+    dateOnly: false,
+  };
+}
+
 function fetchIcs(url) {
   const response = UrlFetchApp.fetch(url, {
     muteHttpExceptions: true,
@@ -371,15 +467,36 @@ function fetchIcs(url) {
   return response.getContentText();
 }
 
-function createSyncHash(icsText, moduleOverrides, moduleNames, reminderMinutes) {
+function createSyncHash(sourceText, moduleOverrides, moduleNames, reminderMinutes, sourceName) {
   return createHash([
-    icsText,
+    sourceName || '',
+    sourceText,
     JSON.stringify(moduleOverrides),
     JSON.stringify(moduleNames),
     JSON.stringify(reminderMinutes),
     SYNC_START_DATE,
     SYNC_END_DATE,
   ].join('\n'));
+}
+
+function toQueryString(params) {
+  return Object.keys(params)
+    .map(function(key) {
+      return encodeURIComponent(key) + '=' + encodeURIComponent(params[key]);
+    })
+    .join('&');
+}
+
+function stripHtml(value) {
+  return String(value || '')
+    .replace(/<[^>]*>/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function createHash(value) {
@@ -465,6 +582,8 @@ function learnModuleNames(events) {
       event.description || '',
       event.location || '',
       event.url || '',
+      event.courseFullName || '',
+      event.courseShortName || '',
     ].forEach(function(value) {
       collectModuleNamesFromText(value, names);
     });
@@ -578,6 +697,7 @@ function buildCalendarResource(event, timezone, moduleOverrides, moduleNames, re
   } else if (moduleCode) {
     descriptionParts.push('Module: ' + moduleCode);
   }
+  if (event.courseFullName) descriptionParts.push('Course: ' + event.courseFullName);
   if (event.description) descriptionParts.push(event.description);
   if (event.url) descriptionParts.push('Moodle: ' + event.url);
 
@@ -626,6 +746,9 @@ function createEventContentHash(event, title, moduleCode, moduleName, reminderMi
     event.description || '',
     event.location || '',
     event.url || '',
+    event.courseFullName || '',
+    event.courseShortName || '',
+    event.courseId || '',
     getParsedDateKey(event.start),
     getParsedDateKey(event.end),
     JSON.stringify(reminderMinutes || []),
@@ -663,6 +786,8 @@ function extractModuleCode(event, moduleOverrides) {
     event.location || '',
     event.url || '',
     event.uid || '',
+    event.courseFullName || '',
+    event.courseShortName || '',
   ].join('\n');
 
   const match = text.match(/\b[A-Z]{2,4}\s?\d{4}\b/);
@@ -674,6 +799,8 @@ function extractModuleName(event, moduleCode) {
     event.summary || '',
     event.description || '',
     event.location || '',
+    event.courseFullName || '',
+    event.courseShortName || '',
   ].join('\n');
   const escapedCode = moduleCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = text.match(new RegExp('\\b' + escapedCode + '\\b\\s*[-:]?\\s*([^\\n\\r\\(]+)', 'i'));
@@ -705,6 +832,19 @@ function getModuleNames(props) {
     return {};
   }
   return JSON.parse(raw);
+}
+
+function getMoodleDataSource(props) {
+  const raw = props.getProperty(PROP_MOODLE_DATA_SOURCE);
+  const value = raw ? raw.toLowerCase().trim() : DATA_SOURCE_ICAL;
+  if (value !== DATA_SOURCE_API && value !== DATA_SOURCE_ICAL) {
+    throw new Error('Invalid ' + PROP_MOODLE_DATA_SOURCE + ': expected "api" or "ical".');
+  }
+  return value;
+}
+
+function getMoodleApiBase(props) {
+  return (props.getProperty(PROP_MOODLE_API_BASE) || DEFAULT_MOODLE_API_BASE).replace(/\/$/, '');
 }
 
 function getReminderMinutes(props) {
@@ -936,10 +1076,13 @@ if (typeof module !== 'undefined' && module.exports) {
     extractModuleCode,
     getMoodleEventKey,
     learnModuleNames,
+    normalizeMoodleApiEvent,
     normalizeKeyPart,
     normalizeTitleForKey,
     parseIcsDate,
     parseIcsEvents,
+    stripHtml,
     unfoldIcsLines,
+    unixTimestampToParsedDate,
   };
 }
