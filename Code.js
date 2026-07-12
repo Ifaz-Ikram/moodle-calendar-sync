@@ -267,6 +267,7 @@ function syncMoodleCalendarInternal(options) {
   const existingByKey = existing.byKey;
   const duplicateDeletes = cleanupDuplicateSyncedEvents(calendarId, existing.duplicates, dryRun);
   const removedMissing = removeMissingMoodleEvents(calendarId, existing.events, moodleUids, moodleVisibleKeys, dryRun);
+  const missingModules = countMissingModuleEvents(moodleEvents, moduleOverrides, now, horizon);
   let created = 0;
   let updated = 0;
   let skipped = 0;
@@ -324,7 +325,50 @@ function syncMoodleCalendarInternal(options) {
   if (!dryRun) {
     props.setProperty(PROP_LAST_SYNC_HASH, syncHash);
   }
-  Logger.log('%s complete. Source: %s, created: %s, updated: %s, unchanged: %s, skipped: %s, deleted duplicates: %s, removed missing: %s, source events: %s, deduped events: %s', dryRun ? 'Moodle dry run' : 'Moodle sync', source.source, created, updated, unchanged, skipped, duplicateDeletes, removedMissing, rawMoodleEvents.length, moodleEvents.length);
+  Logger.log(formatSyncReport({
+    title: dryRun ? 'Moodle dry run complete' : 'Moodle sync complete',
+    source: source.source,
+    calendarId: calendarId,
+    dryRun: dryRun,
+    triggerInstalled: hasSyncTrigger(),
+    created: created,
+    updated: updated,
+    unchanged: unchanged,
+    skipped: skipped,
+    deletedDuplicates: duplicateDeletes,
+    removedMissing: removedMissing,
+    sourceEvents: rawMoodleEvents.length,
+    dedupedEvents: moodleEvents.length,
+    missingModules: missingModules,
+  }));
+}
+
+function formatSyncReport(report) {
+  return [
+    report.title,
+    'Source: ' + report.source,
+    'Calendar ID: ' + report.calendarId,
+    'Dry run: ' + (report.dryRun ? 'yes' : 'no'),
+    'Created: ' + report.created,
+    'Updated: ' + report.updated,
+    'Unchanged: ' + report.unchanged,
+    'Skipped: ' + report.skipped,
+    'Deleted duplicates: ' + report.deletedDuplicates,
+    'Removed missing Moodle events: ' + report.removedMissing,
+    'Source events: ' + report.sourceEvents,
+    'Deduped events: ' + report.dedupedEvents,
+    'Events missing module: ' + report.missingModules,
+    'Hourly trigger installed: ' + (report.triggerInstalled ? 'yes' : 'no'),
+  ].join('\n');
+}
+
+function countMissingModuleEvents(events, moduleOverrides, now, horizon) {
+  return events.filter(function(event) {
+    return event.uid &&
+      event.start &&
+      isInSyncWindow(event, now, horizon) &&
+      !extractModuleCode(event, moduleOverrides);
+  }).length;
 }
 
 function cleanupMoodleCalendarDuplicates() {
@@ -1136,6 +1180,8 @@ if (typeof module !== 'undefined' && module.exports) {
     decodeIcsText,
     dedupeMoodleEvents,
     extractModuleCode,
+    countMissingModuleEvents,
+    formatSyncReport,
     formatCalendarValidationError,
     formatMoodleValidationError,
     getMoodleDataSource,

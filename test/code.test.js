@@ -2,8 +2,10 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  countMissingModuleEvents,
   dedupeMoodleEvents,
   extractModuleCode,
+  formatSyncReport,
   formatCalendarValidationError,
   formatMoodleValidationError,
   getMoodleDataSource,
@@ -215,4 +217,40 @@ test('validation error formatters include setup hints', () => {
     formatCalendarValidationError('primary', new Error('not found')),
     /Enable Services -> Google Calendar API/
   );
+});
+
+test('formatSyncReport includes operational sync counts', () => {
+  const report = formatSyncReport({
+    title: 'Moodle sync complete',
+    source: 'api',
+    calendarId: 'calendar-id',
+    dryRun: false,
+    triggerInstalled: true,
+    created: 1,
+    updated: 2,
+    unchanged: 3,
+    skipped: 4,
+    deletedDuplicates: 5,
+    removedMissing: 6,
+    sourceEvents: 7,
+    dedupedEvents: 8,
+    missingModules: 9,
+  });
+
+  assert.match(report, /Source: api/);
+  assert.match(report, /Created: 1/);
+  assert.match(report, /Events missing module: 9/);
+  assert.match(report, /Hourly trigger installed: yes/);
+});
+
+test('countMissingModuleEvents counts only in-window events without module codes', () => {
+  const now = new Date('2026-07-01T00:00:00Z');
+  const horizon = new Date('2028-06-30T23:59:59Z');
+  const events = [
+    { uid: '1', summary: 'Attendance', start: { dateTime: '2026-07-12T10:00:00Z', dateOnly: false } },
+    { uid: '2', summary: 'CS3501 Attendance', start: { dateTime: '2026-07-12T10:00:00Z', dateOnly: false } },
+    { uid: '3', summary: 'Attendance', start: { dateTime: '2029-07-12T10:00:00Z', dateOnly: false } },
+  ];
+
+  assert.equal(countMissingModuleEvents(events, { byUid: {}, byTitle: {} }, now, horizon), 1);
 });
