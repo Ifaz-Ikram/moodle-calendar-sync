@@ -1,6 +1,7 @@
 node_modules/
 
 .clasprc.json
+.clasp.local.json
 .env
 .env.*
 
