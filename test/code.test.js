@@ -4,13 +4,25 @@ const assert = require('node:assert/strict');
 const {
   dedupeMoodleEvents,
   extractModuleCode,
+  formatCalendarValidationError,
+  formatMoodleValidationError,
+  getMoodleDataSource,
   learnModuleNames,
   normalizeMoodleApiEvent,
   normalizeTitleForKey,
   parseIcsEvents,
   stripHtml,
   unfoldIcsLines,
+  validateJsonProperty,
 } = require('../Code.js');
+
+function mockProps(values) {
+  return {
+    getProperty(name) {
+      return values[name];
+    },
+  };
+}
 
 test('unfoldIcsLines joins folded iCal lines', () => {
   const lines = unfoldIcsLines('SUMMARY:Long Moodle\n title\nDESCRIPTION:first\n second');
@@ -175,4 +187,32 @@ test('API course fields allow automatic module extraction and learning', () => {
 
 test('stripHtml removes tags and decodes common entities', () => {
   assert.equal(stripHtml('<p>A&amp;B &lt; C</p>'), 'A&B < C');
+});
+
+test('getMoodleDataSource defaults to API when token exists', () => {
+  assert.equal(getMoodleDataSource(mockProps({ MOODLE_TOKEN: 'token' })), 'api');
+  assert.equal(getMoodleDataSource(mockProps({})), 'ical');
+  assert.equal(getMoodleDataSource(mockProps({ MOODLE_DATA_SOURCE: 'ical', MOODLE_TOKEN: 'token' })), 'ical');
+});
+
+test('validateJsonProperty reports actionable JSON errors', () => {
+  assert.throws(
+    () => validateJsonProperty('MODULE_NAMES', '[', 'object'),
+    /Fix the value in Apps Script/
+  );
+  assert.throws(
+    () => validateJsonProperty('REMINDER_MINUTES', '{"bad":true}', 'array'),
+    /Example: \[10080,2880,360\]/
+  );
+});
+
+test('validation error formatters include setup hints', () => {
+  assert.match(
+    formatMoodleValidationError('api', new Error('invalidtoken')),
+    /Check MOODLE_API_BASE and MOODLE_TOKEN/
+  );
+  assert.match(
+    formatCalendarValidationError('primary', new Error('not found')),
+    /Enable Services -> Google Calendar API/
+  );
 });

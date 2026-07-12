@@ -32,6 +32,16 @@ function dryRunSyncMoodleCalendar() {
   syncMoodleCalendarInternal({ force: true, dryRun: true });
 }
 
+function setup() {
+  Logger.log('Starting Moodle Calendar Sync setup...');
+  setupMoodleCalendar();
+  validateConfig();
+  setupHourlyTrigger();
+  Logger.log('Setup complete.');
+  Logger.log('Next: run dryRunSyncMoodleCalendar to preview changes.');
+  Logger.log('Then run forceSyncMoodleCalendar to create/update Google Calendar events.');
+}
+
 function setupMoodleCalendar() {
   const props = PropertiesService.getScriptProperties();
   const timezone = props.getProperty(PROP_TIMEZONE) || Session.getScriptTimeZone();
@@ -60,18 +70,39 @@ function validateConfig() {
 
   Logger.log('Validating Moodle Calendar Sync configuration...');
   if (dataSource === DATA_SOURCE_API) {
-    validateRequiredProperty(PROP_MOODLE_TOKEN, props.getProperty(PROP_MOODLE_TOKEN));
+    validateRequiredProperty(
+      PROP_MOODLE_TOKEN,
+      props.getProperty(PROP_MOODLE_TOKEN),
+      'Add your Moodle web service token in Apps Script -> Project Settings -> Script Properties.'
+    );
   } else {
-    validateRequiredProperty(PROP_MOODLE_ICAL_URL, icalUrl);
+    validateRequiredProperty(
+      PROP_MOODLE_ICAL_URL,
+      icalUrl,
+      'Add your private Moodle calendar export URL, or switch to API mode with MOODLE_DATA_SOURCE=api.'
+    );
   }
   validateJsonProperty(PROP_MODULE_NAMES, props.getProperty(PROP_MODULE_NAMES), 'object');
   validateJsonProperty(PROP_MODULE_OVERRIDES, props.getProperty(PROP_MODULE_OVERRIDES), 'object');
   validateJsonProperty(PROP_REMINDER_MINUTES, props.getProperty(PROP_REMINDER_MINUTES), 'array');
 
-  const source = loadMoodleEvents(props);
+  let source;
+  try {
+    source = loadMoodleEvents(props);
+  } catch (error) {
+    throw new Error(formatMoodleValidationError(dataSource, error));
+  }
   Logger.log('Moodle %s fetch OK. Parsed events: %s', source.source, source.rawEvents.length);
+  if (!source.rawEvents.length) {
+    Logger.log('Warning: Moodle fetch worked, but returned 0 events in the sync window.');
+  }
 
-  const calendar = Calendar.Calendars.get(calendarId);
+  let calendar;
+  try {
+    calendar = Calendar.Calendars.get(calendarId);
+  } catch (error) {
+    throw new Error(formatCalendarValidationError(calendarId, error));
+  }
   Logger.log('Google Calendar access OK: %s (%s)', calendar.summary, calendar.id);
   Logger.log('Timezone: %s', timezone);
   Logger.log('Reminder minutes: %s', JSON.stringify(getReminderMinutes(props)));
@@ -144,9 +175,9 @@ function hasSyncTrigger() {
   });
 }
 
-function validateRequiredProperty(name, value) {
+function validateRequiredProperty(name, value, hint) {
   if (!value) {
-    throw new Error('Missing required Script Property: ' + name);
+    throw new Error('Missing required Script Property: ' + name + (hint ? '\n' + hint : ''));
   }
 }
 
@@ -159,16 +190,45 @@ function validateJsonProperty(name, raw, expectedType) {
   try {
     parsed = JSON.parse(raw);
   } catch (error) {
-    throw new Error('Invalid JSON in Script Property ' + name + ': ' + error.message);
+    throw new Error(
+      'Invalid JSON in Script Property ' + name + ': ' + error.message +
+      '\nFix the value in Apps Script -> Project Settings -> Script Properties.'
+    );
   }
 
   if (expectedType === 'array' && !Array.isArray(parsed)) {
-    throw new Error('Script Property ' + name + ' must be a JSON array.');
+    throw new Error('Script Property ' + name + ' must be a JSON array. Example: [10080,2880,360]');
   }
 
   if (expectedType === 'object' && (Array.isArray(parsed) || parsed === null || typeof parsed !== 'object')) {
-    throw new Error('Script Property ' + name + ' must be a JSON object.');
+    throw new Error('Script Property ' + name + ' must be a JSON object. Example: {"CS3501":"Data Science and Engineering Project"}');
   }
+}
+
+function formatMoodleValidationError(dataSource, error) {
+  const message = error && error.message ? error.message : String(error);
+  if (dataSource === DATA_SOURCE_API) {
+    return [
+      'Moodle API validation failed.',
+      'Check MOODLE_API_BASE and MOODLE_TOKEN. If you regenerated the token, update the Script Property.',
+      'Original error: ' + message,
+    ].join('\n');
+  }
+
+  return [
+    'Moodle iCal validation failed.',
+    'Check MOODLE_ICAL_URL. It must be the private export URL, not the normal Moodle calendar page.',
+    'Original error: ' + message,
+  ].join('\n');
+}
+
+function formatCalendarValidationError(calendarId, error) {
+  const message = error && error.message ? error.message : String(error);
+  return [
+    'Google Calendar validation failed for calendar ID: ' + calendarId,
+    'Enable Services -> Google Calendar API in the Apps Script editor, then run setupMoodleCalendar if MOODLE_CALENDAR_ID is missing or wrong.',
+    'Original error: ' + message,
+  ].join('\n');
 }
 
 function syncMoodleCalendarInternal(options) {
@@ -836,7 +896,9 @@ function getModuleNames(props) {
 
 function getMoodleDataSource(props) {
   const raw = props.getProperty(PROP_MOODLE_DATA_SOURCE);
-  const value = raw ? raw.toLowerCase().trim() : DATA_SOURCE_ICAL;
+  const value = raw
+    ? raw.toLowerCase().trim()
+    : (props.getProperty(PROP_MOODLE_TOKEN) ? DATA_SOURCE_API : DATA_SOURCE_ICAL);
   if (value !== DATA_SOURCE_API && value !== DATA_SOURCE_ICAL) {
     throw new Error('Invalid ' + PROP_MOODLE_DATA_SOURCE + ': expected "api" or "ical".');
   }
@@ -1074,6 +1136,9 @@ if (typeof module !== 'undefined' && module.exports) {
     decodeIcsText,
     dedupeMoodleEvents,
     extractModuleCode,
+    formatCalendarValidationError,
+    formatMoodleValidationError,
+    getMoodleDataSource,
     getMoodleEventKey,
     learnModuleNames,
     normalizeMoodleApiEvent,
@@ -1084,5 +1149,6 @@ if (typeof module !== 'undefined' && module.exports) {
     stripHtml,
     unfoldIcsLines,
     unixTimestampToParsedDate,
+    validateJsonProperty,
   };
 }

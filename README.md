@@ -5,7 +5,7 @@ Sync Moodle calendar deadlines into Google Calendar using Google Apps Script.
 This project is built for a personal/student workflow:
 
 ```text
-Moodle private iCal URL
+Moodle API or private iCal URL
         -> Google Apps Script
         -> Google Calendar
 ```
@@ -14,7 +14,8 @@ It does not need a server, database, or paid hosting. Apps Script runs the sync 
 
 ## Features
 
-- Fetches a private Moodle iCal calendar feed.
+- Fetches Moodle deadlines from the Moodle Web Services API.
+- Falls back to a private Moodle iCal calendar feed when API access is unavailable.
 - Creates Moodle deadlines in Google Calendar.
 - Updates existing Google Calendar events when Moodle changes them.
 - Removes synced Google Calendar events that disappear from the Moodle feed.
@@ -33,16 +34,17 @@ It does not need a server, database, or paid hosting. Apps Script runs the sync 
 
 ## Important Security Note
 
-Your Moodle iCal URL usually contains a private token. Treat it like a password.
+Your Moodle API token and Moodle iCal URL are private credentials. Treat them like passwords.
 
 Do not commit or share:
 
+- your Moodle API token
 - your Moodle iCal URL
 - `.clasprc.json`
 - `.env` files
-- screenshots containing the full Moodle calendar URL
+- screenshots containing tokens or the full Moodle calendar URL
 
-The URL belongs in Apps Script **Script Properties** only.
+These values belong in Apps Script **Script Properties** only.
 
 ## Quick Start
 
@@ -59,12 +61,10 @@ npx clasp open-script
 Then in Apps Script:
 
 1. Enable the advanced `Calendar` service.
-2. Add either iCal or API Script Properties plus `TIMEZONE`.
-3. Run `validateConfig`.
-4. Run `setupMoodleCalendar`.
-5. Run `dryRunSyncMoodleCalendar`.
-6. Run `forceSyncMoodleCalendar`.
-7. Run `setupHourlyTrigger`.
+2. Add API Script Properties plus `TIMEZONE`.
+3. Run `setup`.
+4. Run `dryRunSyncMoodleCalendar`.
+5. Run `forceSyncMoodleCalendar`.
 
 ## Setup
 
@@ -122,14 +122,7 @@ In Apps Script:
 Project Settings -> Script properties
 ```
 
-Add:
-
-```text
-MOODLE_ICAL_URL     <your private Moodle calendar URL>
-TIMEZONE            Asia/Colombo
-```
-
-For Moodle API mode, add:
+Recommended API setup:
 
 ```text
 MOODLE_DATA_SOURCE  api
@@ -138,7 +131,18 @@ MOODLE_TOKEN        <your Moodle web service token>
 TIMEZONE            Asia/Colombo
 ```
 
-Keep `MOODLE_ICAL_URL` as a fallback if you want, but do not put either token in source code.
+API mode is recommended because Moodle returns course metadata with events. This lets the script automatically add module codes/names to generic events such as `Attendance`.
+
+Fallback iCal setup:
+
+```text
+MOODLE_ICAL_URL     <your private Moodle calendar URL>
+TIMEZONE            Asia/Colombo
+```
+
+If `MOODLE_DATA_SOURCE` is unset, the script uses API mode when `MOODLE_TOKEN` exists. Otherwise it uses iCal mode.
+
+Keep `MOODLE_ICAL_URL` as a fallback if you want, but do not put any token in source code.
 
 Optional:
 
@@ -164,7 +168,7 @@ Use `primary` only if you intentionally want Moodle events in your main Google C
 
 | Property | Required | Example | Purpose |
 | --- | --- | --- | --- |
-| `MOODLE_DATA_SOURCE` | No | `ical` or `api` | Selects Moodle data source. Defaults to `ical`. |
+| `MOODLE_DATA_SOURCE` | No | `api` or `ical` | Selects Moodle data source. If unset, uses API when `MOODLE_TOKEN` exists, otherwise iCal. |
 | `MOODLE_ICAL_URL` | For iCal mode | `https://.../calendar/export_execute.php?...` | Private Moodle iCal feed URL. |
 | `MOODLE_API_BASE` | For API mode | `https://online.uom.lk` | Moodle site base URL. |
 | `MOODLE_TOKEN` | For API mode | `<token>` | Moodle web service token. Never commit this. |
@@ -205,7 +209,7 @@ Example value:
 
 ### 7. Add module overrides for ambiguous Moodle events
 
-Some Moodle iCal events only contain generic titles like `Attendance` and do not expose the course/module. For those, add:
+Some Moodle iCal events only contain generic titles like `Attendance` and do not expose the course/module. API mode usually avoids this because Moodle includes course metadata. If an event is still ambiguous, add:
 
 ```text
 MODULE_OVERRIDES
@@ -230,9 +234,7 @@ Example value:
 
 Use `byTitle` when every event with that title belongs to the same module. Use `byUid` when only one specific Moodle event should be mapped.
 
-This part cannot be fully automated from iCal alone when Moodle omits the course/module from the feed. For full automation of ambiguous items, the project would need Moodle API access or a browser extension that can read the logged-in Moodle page.
-
-If `MOODLE_DATA_SOURCE=api` works for your Moodle site, many `MODULE_OVERRIDES` entries become unnecessary because the API includes course metadata.
+This part cannot be fully automated from iCal alone when Moodle omits the course/module from the feed. If `MOODLE_DATA_SOURCE=api` works for your Moodle site, many `MODULE_OVERRIDES` entries become unnecessary because the API includes course metadata.
 
 ### Moodle API token check
 
@@ -279,45 +281,37 @@ npx clasp push --force
 npm test
 ```
 
-### 10. Validate setup
+### 10. Run first-time setup
 
 In Apps Script, select and run:
 
 ```text
-validateConfig
+setup
 ```
 
-This checks required Script Properties, JSON formatting, Moodle data-source access, Google Calendar access, reminders, and whether a sync trigger is installed.
+This creates or reuses the `Moodle Deadlines` Google Calendar, validates Script Properties, checks Moodle and Google Calendar access, and installs the hourly trigger.
 
-### 11. Create the Moodle calendar
+### 11. Preview changes
 
 In Apps Script, select and run:
 
 ```text
-setupMoodleCalendar
+dryRunSyncMoodleCalendar
 ```
 
-This creates or reuses a Google Calendar named `Moodle Deadlines` and stores its calendar ID in Script Properties.
+This logs what would be created, updated, deleted, or skipped without changing Google Calendar.
 
 ### 12. Run once manually
 
 In Apps Script, select and run:
 
 ```text
-syncMoodleCalendar
+forceSyncMoodleCalendar
 ```
 
 Authorize the requested Google permissions.
 
-### 13. Add the automatic trigger
-
-In Apps Script, select and run:
-
-```text
-setupHourlyTrigger
-```
-
-This installs the recommended hourly trigger automatically.
+`setup` already installs the recommended hourly trigger automatically.
 
 Manual equivalent:
 
@@ -343,6 +337,12 @@ If you originally synced into your main calendar:
 This removes synced Moodle events from `primary` while keeping your personal calendar events alone.
 
 ## Useful Functions
+
+### `setup`
+
+First-run helper. Creates or reuses the Moodle calendar, validates configuration, installs the hourly trigger, and logs the next steps.
+
+It does not create Moodle events. Run `dryRunSyncMoodleCalendar`, then `forceSyncMoodleCalendar`.
 
 ### `syncMoodleCalendar`
 
@@ -371,6 +371,8 @@ Creates or reuses a Google Calendar named `Moodle Deadlines` and stores its cale
 ### `validateConfig`
 
 Checks Script Properties, Moodle data-source access, Google Calendar access, reminder configuration, and trigger presence.
+
+When validation fails, the error message points to the likely fix, such as missing `MOODLE_TOKEN`, invalid JSON in `MODULE_NAMES`, a broken Moodle iCal URL, or the Google Calendar advanced service not being enabled.
 
 ### `cleanupPrimaryMoodleEvents`
 
@@ -483,11 +485,11 @@ npx clasp status
 
 ## Recommended Workflow
 
-1. Run `inspectAmbiguousMoodleEvents`.
-2. Add missing module mappings to `MODULE_OVERRIDES`.
-3. Run `cleanupMoodleCalendarDuplicates`.
-4. Run `syncMoodleCalendar`.
-5. Run `setupHourlyTrigger`.
+1. Configure API mode with `MOODLE_TOKEN`.
+2. Run `setup`.
+3. Run `dryRunSyncMoodleCalendar`.
+4. Run `forceSyncMoodleCalendar`.
+5. Run `inspectAmbiguousMoodleEvents` only if some events still miss module details.
 
 ## License
 
