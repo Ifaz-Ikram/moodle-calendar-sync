@@ -1,17 +1,85 @@
 const PROP_MOODLE_ICAL_URL = 'MOODLE_ICAL_URL';
 const PROP_MOODLE_CALENDAR_ID = 'MOODLE_CALENDAR_ID';
+const PROP_MOODLE_CALENDAR_NAME = 'MOODLE_CALENDAR_NAME';
 const PROP_TIMEZONE = 'TIMEZONE';
 const PROP_MODULE_OVERRIDES = 'MODULE_OVERRIDES';
 const PROP_MODULE_NAMES = 'MODULE_NAMES';
+const PROP_REMINDER_MINUTES = 'REMINDER_MINUTES';
+const PROP_LAST_SYNC_HASH = 'LAST_SYNC_HASH';
 const SYNC_TAG = 'MOODLE_SYNC_UID';
 const SOURCE_NAME = 'moodle-calendar-sync';
+const DEFAULT_MOODLE_CALENDAR_NAME = 'Moodle Deadlines';
+const DEFAULT_REMINDER_MINUTES = [10080, 2880, 360];
+const SYNC_TRIGGER_HANDLER = 'syncMoodleCalendar';
 const SYNC_START_DATE = '2026-07-01';
 const SYNC_END_DATE = '2028-06-30';
 
 function syncMoodleCalendar() {
+  syncMoodleCalendarInternal({ force: false, dryRun: false });
+}
+
+function forceSyncMoodleCalendar() {
+  syncMoodleCalendarInternal({ force: true, dryRun: false });
+}
+
+function dryRunSyncMoodleCalendar() {
+  syncMoodleCalendarInternal({ force: true, dryRun: true });
+}
+
+function setupMoodleCalendar() {
+  const props = PropertiesService.getScriptProperties();
+  const timezone = props.getProperty(PROP_TIMEZONE) || Session.getScriptTimeZone();
+  const calendarName = props.getProperty(PROP_MOODLE_CALENDAR_NAME) || DEFAULT_MOODLE_CALENDAR_NAME;
+  const calendar = findOrCreateCalendar(calendarName, timezone);
+
+  props.setProperty(PROP_MOODLE_CALENDAR_ID, calendar.id);
+  Logger.log('Moodle calendar ready: %s (%s)', calendar.summary, calendar.id);
+}
+
+function setupHourlyTrigger() {
+  removeSyncTriggers();
+  ScriptApp.newTrigger(SYNC_TRIGGER_HANDLER)
+    .timeBased()
+    .everyHours(1)
+    .create();
+  Logger.log('Hourly sync trigger installed for %s.', SYNC_TRIGGER_HANDLER);
+}
+
+function validateConfig() {
   const props = PropertiesService.getScriptProperties();
   const icalUrl = props.getProperty(PROP_MOODLE_ICAL_URL);
   const calendarId = props.getProperty(PROP_MOODLE_CALENDAR_ID) || 'primary';
+  const timezone = props.getProperty(PROP_TIMEZONE) || Session.getScriptTimeZone();
+
+  Logger.log('Validating Moodle Calendar Sync configuration...');
+  validateRequiredProperty(PROP_MOODLE_ICAL_URL, icalUrl);
+  validateJsonProperty(PROP_MODULE_NAMES, props.getProperty(PROP_MODULE_NAMES), 'object');
+  validateJsonProperty(PROP_MODULE_OVERRIDES, props.getProperty(PROP_MODULE_OVERRIDES), 'object');
+  validateJsonProperty(PROP_REMINDER_MINUTES, props.getProperty(PROP_REMINDER_MINUTES), 'array');
+
+  const response = UrlFetchApp.fetch(icalUrl, {
+    muteHttpExceptions: true,
+    followRedirects: true,
+  });
+  const code = response.getResponseCode();
+  if (code < 200 || code >= 300) {
+    throw new Error('Moodle iCal fetch failed. HTTP ' + code);
+  }
+  const icsText = response.getContentText();
+  const events = parseIcsEvents(icsText);
+  Logger.log('Moodle iCal fetch OK. Parsed events: %s', events.length);
+
+  const calendar = Calendar.Calendars.get(calendarId);
+  Logger.log('Google Calendar access OK: %s (%s)', calendar.summary, calendar.id);
+  Logger.log('Timezone: %s', timezone);
+  Logger.log('Reminder minutes: %s', JSON.stringify(getReminderMinutes(props)));
+  Logger.log('Sync trigger installed: %s', hasSyncTrigger() ? 'yes' : 'no');
+  Logger.log('Configuration validation complete.');
+}
+
+function cleanupPrimaryMoodleEvents() {
+  const props = PropertiesService.getScriptProperties();
+  const icalUrl = props.getProperty(PROP_MOODLE_ICAL_URL);
   const timezone = props.getProperty(PROP_TIMEZONE) || Session.getScriptTimeZone();
   const moduleOverrides = getModuleOverrides(props);
   const moduleNames = getModuleNames(props);
@@ -20,7 +88,108 @@ function syncMoodleCalendar() {
     throw new Error('Missing script property: ' + PROP_MOODLE_ICAL_URL);
   }
 
+  const rawMoodleEvents = parseIcsEvents(fetchIcs(icalUrl));
+  const moodleEvents = dedupeMoodleEvents(rawMoodleEvents);
+  const learnedModuleNames = learnModuleNames(rawMoodleEvents);
+  Object.keys(learnedModuleNames).forEach(function(code) {
+    if (!moduleNames[code]) {
+      moduleNames[code] = learnedModuleNames[code];
+    }
+  });
+
+  const moodleVisibleKeys = getMoodleVisibleKeys(moodleEvents, moduleOverrides, moduleNames, timezone);
+  const now = new Date(SYNC_START_DATE + 'T00:00:00Z');
+  const horizon = new Date(SYNC_END_DATE + 'T23:59:59Z');
+  const existing = findExistingMoodleEvents('primary', now, horizon, moodleVisibleKeys);
+  const deleted = removeExistingMoodleEvents('primary', existing.events);
+
+  Logger.log('Primary calendar Moodle cleanup complete. Deleted: %s', deleted);
+}
+
+function removeSyncTriggers() {
+  let removed = 0;
+  ScriptApp.getProjectTriggers().forEach(function(trigger) {
+    if (trigger.getHandlerFunction() === SYNC_TRIGGER_HANDLER) {
+      ScriptApp.deleteTrigger(trigger);
+      removed++;
+    }
+  });
+  Logger.log('Removed %s sync trigger(s).', removed);
+}
+
+function listProjectTriggers() {
+  const triggers = ScriptApp.getProjectTriggers();
+  if (!triggers.length) {
+    Logger.log('No project triggers installed.');
+    return;
+  }
+
+  triggers.forEach(function(trigger) {
+    Logger.log(
+      'Trigger | handler=%s | source=%s | event=%s | id=%s',
+      trigger.getHandlerFunction(),
+      trigger.getTriggerSource(),
+      trigger.getEventType(),
+      trigger.getUniqueId()
+    );
+  });
+}
+
+function hasSyncTrigger() {
+  return ScriptApp.getProjectTriggers().some(function(trigger) {
+    return trigger.getHandlerFunction() === SYNC_TRIGGER_HANDLER;
+  });
+}
+
+function validateRequiredProperty(name, value) {
+  if (!value) {
+    throw new Error('Missing required Script Property: ' + name);
+  }
+}
+
+function validateJsonProperty(name, raw, expectedType) {
+  if (!raw) {
+    return;
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(raw);
+  } catch (error) {
+    throw new Error('Invalid JSON in Script Property ' + name + ': ' + error.message);
+  }
+
+  if (expectedType === 'array' && !Array.isArray(parsed)) {
+    throw new Error('Script Property ' + name + ' must be a JSON array.');
+  }
+
+  if (expectedType === 'object' && (Array.isArray(parsed) || parsed === null || typeof parsed !== 'object')) {
+    throw new Error('Script Property ' + name + ' must be a JSON object.');
+  }
+}
+
+function syncMoodleCalendarInternal(options) {
+  const force = Boolean(options && options.force);
+  const dryRun = Boolean(options && options.dryRun);
+  const props = PropertiesService.getScriptProperties();
+  const icalUrl = props.getProperty(PROP_MOODLE_ICAL_URL);
+  const calendarId = props.getProperty(PROP_MOODLE_CALENDAR_ID) || 'primary';
+  const timezone = props.getProperty(PROP_TIMEZONE) || Session.getScriptTimeZone();
+  const moduleOverrides = getModuleOverrides(props);
+  const moduleNames = getModuleNames(props);
+  const reminderMinutes = getReminderMinutes(props);
+
+  if (!icalUrl) {
+    throw new Error('Missing script property: ' + PROP_MOODLE_ICAL_URL);
+  }
+
   const icsText = fetchIcs(icalUrl);
+  const syncHash = createSyncHash(icsText, moduleOverrides, moduleNames, reminderMinutes);
+  if (!force && props.getProperty(PROP_LAST_SYNC_HASH) === syncHash) {
+    Logger.log('Moodle sync skipped. Feed and module configuration unchanged.');
+    return;
+  }
+
   const rawMoodleEvents = parseIcsEvents(icsText);
   const moodleEvents = dedupeMoodleEvents(rawMoodleEvents);
   const learnedModuleNames = learnModuleNames(rawMoodleEvents);
@@ -37,11 +206,12 @@ function syncMoodleCalendar() {
   const existing = findExistingMoodleEvents(calendarId, now, horizon, moodleVisibleKeys);
   const existingByUid = existing.byUid;
   const existingByKey = existing.byKey;
-  const duplicateDeletes = cleanupDuplicateSyncedEvents(calendarId, existing.duplicates);
-  const removedMissing = removeMissingMoodleEvents(calendarId, existing.events, moodleUids, moodleVisibleKeys);
+  const duplicateDeletes = cleanupDuplicateSyncedEvents(calendarId, existing.duplicates, dryRun);
+  const removedMissing = removeMissingMoodleEvents(calendarId, existing.events, moodleUids, moodleVisibleKeys, dryRun);
   let created = 0;
   let updated = 0;
   let skipped = 0;
+  let unchanged = 0;
   const handledKeys = {};
 
   moodleEvents.forEach(function(event) {
@@ -55,7 +225,7 @@ function syncMoodleCalendar() {
     }
 
     const existing = existingByUid[event.uid];
-    const resource = buildCalendarResource(event, timezone, moduleOverrides, moduleNames);
+    const resource = buildCalendarResource(event, timezone, moduleOverrides, moduleNames, reminderMinutes);
     const resourceKey = getResourceKey(resource);
     const existingMatch = existing || existingByKey[resourceKey];
 
@@ -66,23 +236,36 @@ function syncMoodleCalendar() {
     handledKeys[resourceKey] = true;
 
     if (existingMatch) {
-      callCalendarWithRetry(function() {
-        return Calendar.Events.update(resource, calendarId, existingMatch.id);
-      });
-      updated++;
+      if (getEventContentHash(existingMatch) === resource.extendedProperties.private.contentHash) {
+        unchanged++;
+      } else {
+        if (!dryRun) {
+          callCalendarWithRetry(function() {
+            return Calendar.Events.update(resource, calendarId, existingMatch.id);
+          });
+          Utilities.sleep(250);
+        }
+        logDryRunAction(dryRun, 'update', resource);
+        updated++;
+      }
       existingByKey[resourceKey] = existingMatch;
     } else {
-      const inserted = callCalendarWithRetry(function() {
-        return Calendar.Events.insert(resource, calendarId);
-      });
-      existingByKey[resourceKey] = inserted;
+      if (!dryRun) {
+        const inserted = callCalendarWithRetry(function() {
+          return Calendar.Events.insert(resource, calendarId);
+        });
+        existingByKey[resourceKey] = inserted;
+        Utilities.sleep(250);
+      }
+      logDryRunAction(dryRun, 'create', resource);
       created++;
     }
-
-    Utilities.sleep(250);
   });
 
-  Logger.log('Moodle sync complete. Created: %s, updated: %s, skipped: %s, deleted duplicates: %s, removed missing: %s, source events: %s, deduped events: %s', created, updated, skipped, duplicateDeletes, removedMissing, rawMoodleEvents.length, moodleEvents.length);
+  if (!dryRun) {
+    props.setProperty(PROP_LAST_SYNC_HASH, syncHash);
+  }
+  Logger.log('%s complete. Created: %s, updated: %s, unchanged: %s, skipped: %s, deleted duplicates: %s, removed missing: %s, source events: %s, deduped events: %s', dryRun ? 'Moodle dry run' : 'Moodle sync', created, updated, unchanged, skipped, duplicateDeletes, removedMissing, rawMoodleEvents.length, moodleEvents.length);
 }
 
 function cleanupMoodleCalendarDuplicates() {
@@ -150,6 +333,32 @@ function inspectLearnedModuleNames() {
   Logger.log(JSON.stringify(names, null, 2));
 }
 
+function findOrCreateCalendar(calendarName, timezone) {
+  let pageToken;
+
+  do {
+    const result = Calendar.CalendarList.list({
+      minAccessRole: 'owner',
+      pageToken: pageToken,
+    });
+
+    const calendars = result.items || [];
+    for (let i = 0; i < calendars.length; i++) {
+      if (calendars[i].summary === calendarName) {
+        return calendars[i];
+      }
+    }
+
+    pageToken = result.nextPageToken;
+  } while (pageToken);
+
+  return Calendar.Calendars.insert({
+    summary: calendarName,
+    timeZone: timezone,
+    description: 'Moodle deadlines synced by Moodle Calendar Sync.',
+  });
+}
+
 function fetchIcs(url) {
   const response = UrlFetchApp.fetch(url, {
     muteHttpExceptions: true,
@@ -160,6 +369,29 @@ function fetchIcs(url) {
     throw new Error('Failed to fetch Moodle iCal. HTTP ' + code);
   }
   return response.getContentText();
+}
+
+function createSyncHash(icsText, moduleOverrides, moduleNames, reminderMinutes) {
+  return createHash([
+    icsText,
+    JSON.stringify(moduleOverrides),
+    JSON.stringify(moduleNames),
+    JSON.stringify(reminderMinutes),
+    SYNC_START_DATE,
+    SYNC_END_DATE,
+  ].join('\n'));
+}
+
+function createHash(value) {
+  const bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256,
+    value,
+    Utilities.Charset.UTF_8
+  );
+  return bytes.map(function(byte) {
+    const unsigned = byte < 0 ? byte + 256 : byte;
+    return ('0' + unsigned.toString(16)).slice(-2);
+  }).join('');
 }
 
 function parseIcsEvents(icsText) {
@@ -208,7 +440,7 @@ function getMoodleEventKey(event) {
 function getMoodleVisibleKeys(events, moduleOverrides, moduleNames, timezone) {
   const keys = {};
   events.forEach(function(event) {
-    const resource = buildCalendarResource(event, timezone, moduleOverrides, moduleNames);
+    const resource = buildCalendarResource(event, timezone, moduleOverrides, moduleNames, DEFAULT_REMINDER_MINUTES);
     keys[getVisibleEventKey(resource)] = true;
   });
   return keys;
@@ -336,7 +568,7 @@ function shortenForLog(value) {
   return String(value).replace(/\s+/g, ' ').slice(0, 300);
 }
 
-function buildCalendarResource(event, timezone, moduleOverrides, moduleNames) {
+function buildCalendarResource(event, timezone, moduleOverrides, moduleNames, reminderMinutes) {
   const moduleCode = extractModuleCode(event, moduleOverrides);
   const moduleName = moduleCode ? moduleNames[moduleCode] || extractModuleName(event, moduleCode) : '';
   const title = formatEventTitle(event, moduleCode, moduleName);
@@ -349,16 +581,27 @@ function buildCalendarResource(event, timezone, moduleOverrides, moduleNames) {
   if (event.description) descriptionParts.push(event.description);
   if (event.url) descriptionParts.push('Moodle: ' + event.url);
 
+  const contentHash = createEventContentHash(event, title, moduleCode, moduleName, reminderMinutes);
   const resource = {
     summary: title,
     description: descriptionParts.join('\n\n'),
     location: event.location || '',
+    reminders: {
+      useDefault: false,
+      overrides: reminderMinutes.map(function(minutes) {
+        return {
+          method: 'popup',
+          minutes: minutes,
+        };
+      }),
+    },
     extendedProperties: {
       private: {
         source: SOURCE_NAME,
         moodleUid: event.uid,
         moduleCode: moduleCode || '',
         moduleName: moduleName || '',
+        contentHash: contentHash,
       },
     },
   };
@@ -372,6 +615,26 @@ function buildCalendarResource(event, timezone, moduleOverrides, moduleNames) {
   }
 
   return resource;
+}
+
+function createEventContentHash(event, title, moduleCode, moduleName, reminderMinutes) {
+  return createHash([
+    event.uid || '',
+    title || '',
+    moduleCode || '',
+    moduleName || '',
+    event.description || '',
+    event.location || '',
+    event.url || '',
+    getParsedDateKey(event.start),
+    getParsedDateKey(event.end),
+    JSON.stringify(reminderMinutes || []),
+  ].join('\n'));
+}
+
+function getEventContentHash(event) {
+  const privateProps = event.extendedProperties && event.extendedProperties.private;
+  return privateProps && privateProps.contentHash;
 }
 
 function formatEventTitle(event, moduleCode, moduleName) {
@@ -444,6 +707,22 @@ function getModuleNames(props) {
   return JSON.parse(raw);
 }
 
+function getReminderMinutes(props) {
+  const raw = props.getProperty(PROP_REMINDER_MINUTES);
+  if (!raw) {
+    return DEFAULT_REMINDER_MINUTES;
+  }
+
+  const parsed = JSON.parse(raw);
+  return parsed
+    .map(function(value) {
+      return Number(value);
+    })
+    .filter(function(value) {
+      return Number.isFinite(value) && value >= 0;
+    });
+}
+
 function getResourceKey(resource) {
   return getVisibleEventKey(resource);
 }
@@ -481,7 +760,7 @@ function normalizeKeyPart(value) {
 }
 
 function normalizeTitleForKey(value) {
-  return normalizeKeyPart(value).replace(/^\[[a-z]{2,4}\d{4}\]\s*/, '');
+  return normalizeKeyPart(value).replace(/^\[[a-z]{2,4}\d{4}[^\]]*\]\s*/, '');
 }
 
 function isInSyncWindow(event, now, horizon) {
@@ -575,7 +854,7 @@ function findExistingMoodleEvents(calendarId, timeMin, timeMax, moodleVisibleKey
   };
 }
 
-function removeMissingMoodleEvents(calendarId, existingEvents, moodleUids, moodleVisibleKeys) {
+function removeMissingMoodleEvents(calendarId, existingEvents, moodleUids, moodleVisibleKeys, dryRun) {
   let deleted = 0;
 
   (existingEvents || []).forEach(function(item) {
@@ -583,24 +862,26 @@ function removeMissingMoodleEvents(calendarId, existingEvents, moodleUids, moodl
     const stillExistsByKey = moodleVisibleKeys[item.key];
 
     if (!stillExistsByUid && !stillExistsByKey) {
-      callCalendarWithRetry(function() {
-        return Calendar.Events.remove(calendarId, item.event.id);
-      });
+      if (!dryRun) {
+        callCalendarWithRetry(function() {
+          return Calendar.Events.remove(calendarId, item.event.id);
+        });
+        Utilities.sleep(250);
+      }
+      logDryRunAction(dryRun, 'remove missing', item.event);
       deleted++;
-      Utilities.sleep(250);
     }
   });
 
   return deleted;
 }
 
-function cleanupDuplicateSyncedEvents(calendarId, duplicates) {
-  duplicates = duplicates || [];
+function removeExistingMoodleEvents(calendarId, existingEvents) {
   let deleted = 0;
 
-  duplicates.forEach(function(event) {
+  (existingEvents || []).forEach(function(item) {
     callCalendarWithRetry(function() {
-      return Calendar.Events.remove(calendarId, event.id);
+      return Calendar.Events.remove(calendarId, item.event.id);
     });
     deleted++;
     Utilities.sleep(250);
@@ -609,8 +890,56 @@ function cleanupDuplicateSyncedEvents(calendarId, duplicates) {
   return deleted;
 }
 
+function cleanupDuplicateSyncedEvents(calendarId, duplicates, dryRun) {
+  duplicates = duplicates || [];
+  let deleted = 0;
+
+  duplicates.forEach(function(event) {
+    if (!dryRun) {
+      callCalendarWithRetry(function() {
+        return Calendar.Events.remove(calendarId, event.id);
+      });
+      Utilities.sleep(250);
+    }
+    logDryRunAction(dryRun, 'delete duplicate', event);
+    deleted++;
+  });
+
+  return deleted;
+}
+
+function logDryRunAction(dryRun, action, event) {
+  if (!dryRun) {
+    return;
+  }
+
+  Logger.log(
+    'Dry run would %s | %s | %s',
+    action,
+    event.summary || 'Moodle event',
+    getCalendarDateKey(event.start)
+  );
+}
+
 function addDays(dateText, days) {
   const date = new Date(dateText + 'T00:00:00Z');
   date.setUTCDate(date.getUTCDate() + days);
   return Utilities.formatDate(date, 'UTC', 'yyyy-MM-dd');
+}
+
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = {
+    cleanModuleName,
+    collectModuleNamesFromText,
+    decodeIcsText,
+    dedupeMoodleEvents,
+    extractModuleCode,
+    getMoodleEventKey,
+    learnModuleNames,
+    normalizeKeyPart,
+    normalizeTitleForKey,
+    parseIcsDate,
+    parseIcsEvents,
+    unfoldIcsLines,
+  };
 }

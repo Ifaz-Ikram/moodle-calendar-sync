@@ -20,6 +20,13 @@ It does not need a server, database, or paid hosting. Apps Script runs the sync 
 - Removes synced Google Calendar events that disappear from the Moodle feed.
 - Deduplicates repeated Moodle events.
 - Learns module names from Moodle event titles/descriptions where possible.
+- Skips Calendar API work when the Moodle feed and module configuration have not changed.
+- Skips updating individual Google Calendar events when their content has not changed.
+- Can create and use a separate Google Calendar for Moodle deadlines.
+- Can install/remove the hourly Apps Script trigger from helper functions.
+- Adds default popup reminders to Moodle deadlines.
+- Includes a configuration validator for setup troubleshooting.
+- Provides a dry-run sync preview.
 - Supports manual module overrides for generic Moodle titles such as `Attendance`.
 - Stores Moodle and Google Calendar configuration in Apps Script Script Properties, not in source code.
 
@@ -35,6 +42,28 @@ Do not commit or share:
 - screenshots containing the full Moodle calendar URL
 
 The URL belongs in Apps Script **Script Properties** only.
+
+## Quick Start
+
+For a new setup:
+
+```bash
+npm install
+npx clasp login
+npx clasp create --title "Moodle Calendar Sync" --type standalone
+npx clasp push --force
+npx clasp open-script
+```
+
+Then in Apps Script:
+
+1. Enable the advanced `Calendar` service.
+2. Add `MOODLE_ICAL_URL` and `TIMEZONE` in Script Properties.
+3. Run `validateConfig`.
+4. Run `setupMoodleCalendar`.
+5. Run `dryRunSyncMoodleCalendar`.
+6. Run `forceSyncMoodleCalendar`.
+7. Run `setupHourlyTrigger`.
 
 ## Setup
 
@@ -96,11 +125,40 @@ Add:
 
 ```text
 MOODLE_ICAL_URL     <your private Moodle calendar URL>
-MOODLE_CALENDAR_ID  primary
 TIMEZONE            Asia/Colombo
 ```
 
-Use `primary` to sync into your main Google Calendar. To sync into a separate calendar, use that Google Calendar's calendar ID instead.
+Optional:
+
+```text
+MOODLE_CALENDAR_NAME  Moodle Deadlines
+MOODLE_CALENDAR_ID    primary
+REMINDER_MINUTES      [10080, 2880, 360]
+```
+
+Recommended: leave `MOODLE_CALENDAR_ID` unset at first, then run `setupMoodleCalendar`. It creates or reuses a separate calendar and stores its ID automatically.
+
+Use `primary` only if you intentionally want Moodle events in your main Google Calendar.
+
+`REMINDER_MINUTES` is a JSON array of popup reminders before the deadline. The default is:
+
+```text
+10080 = 7 days
+2880  = 2 days
+360   = 6 hours
+```
+
+## Configuration Reference
+
+| Property | Required | Example | Purpose |
+| --- | --- | --- | --- |
+| `MOODLE_ICAL_URL` | Yes | `https://.../calendar/export_execute.php?...` | Private Moodle iCal feed URL. |
+| `TIMEZONE` | Recommended | `Asia/Colombo` | Timezone for Google Calendar event times. |
+| `MOODLE_CALENDAR_ID` | No | `primary` or `abc@group.calendar.google.com` | Target Google Calendar. Set automatically by `setupMoodleCalendar`. |
+| `MOODLE_CALENDAR_NAME` | No | `Moodle Deadlines` | Calendar name used by `setupMoodleCalendar`. |
+| `MODULE_NAMES` | No | `{"CS3501":"Data Science and Engineering Project"}` | Manual module-name map. |
+| `MODULE_OVERRIDES` | No | `{"byTitle":{},"byUid":{}}` | Manual mappings for ambiguous Moodle events. |
+| `REMINDER_MINUTES` | No | `[10080,2880,360]` | Popup reminders before deadlines. |
 
 ### 6. Add module names
 
@@ -163,7 +221,33 @@ This part cannot be fully automated from iCal alone when Moodle omits the course
 npx clasp push --force
 ```
 
-### 9. Run once manually
+### 9. Run tests locally
+
+```bash
+npm test
+```
+
+### 10. Validate setup
+
+In Apps Script, select and run:
+
+```text
+validateConfig
+```
+
+This checks required Script Properties, JSON formatting, Moodle feed access, Google Calendar access, reminders, and whether a sync trigger is installed.
+
+### 11. Create the Moodle calendar
+
+In Apps Script, select and run:
+
+```text
+setupMoodleCalendar
+```
+
+This creates or reuses a Google Calendar named `Moodle Deadlines` and stores its calendar ID in Script Properties.
+
+### 12. Run once manually
 
 In Apps Script, select and run:
 
@@ -173,15 +257,17 @@ syncMoodleCalendar
 
 Authorize the requested Google permissions.
 
-### 10. Add the automatic trigger
+### 13. Add the automatic trigger
 
-In Apps Script:
+In Apps Script, select and run:
 
 ```text
-Triggers -> Add Trigger
+setupHourlyTrigger
 ```
 
-Recommended trigger:
+This installs the recommended hourly trigger automatically.
+
+Manual equivalent:
 
 ```text
 Function: syncMoodleCalendar
@@ -193,11 +279,70 @@ Interval: Every hour
 
 Hourly syncing is recommended. Running every minute is unnecessary and more likely to hit Apps Script or Google Calendar rate limits.
 
+## Migrating From `primary` To `Moodle Deadlines`
+
+If you originally synced into your main calendar:
+
+1. Run `setupMoodleCalendar`.
+2. Run `forceSyncMoodleCalendar`.
+3. Confirm events appear in the new `Moodle Deadlines` calendar.
+4. Run `cleanupPrimaryMoodleEvents`.
+
+This removes synced Moodle events from `primary` while keeping your personal calendar events alone.
+
 ## Useful Functions
 
 ### `syncMoodleCalendar`
 
 Main sync function. Fetches Moodle, updates Google Calendar, removes missing events, and deduplicates synced events.
+
+If the Moodle feed and module configuration are unchanged, it skips Calendar API reads/writes to reduce quota usage.
+
+When the feed has changed, each event is still compared with a stored content hash so unchanged events are not rewritten.
+
+Synced events use popup reminders from `REMINDER_MINUTES`, or `[10080, 2880, 360]` by default.
+
+### `forceSyncMoodleCalendar`
+
+Runs the full sync even when the feed hash has not changed.
+
+Use this after changing Script Properties such as `MODULE_NAMES` or `MODULE_OVERRIDES`.
+
+### `dryRunSyncMoodleCalendar`
+
+Previews creates, updates, duplicate deletes, and missing-event removals without changing Google Calendar.
+
+### `setupMoodleCalendar`
+
+Creates or reuses a Google Calendar named `Moodle Deadlines` and stores its calendar ID in `MOODLE_CALENDAR_ID`.
+
+### `validateConfig`
+
+Checks Script Properties, Moodle iCal access, Google Calendar access, reminder configuration, and trigger presence.
+
+### `cleanupPrimaryMoodleEvents`
+
+Removes synced Moodle events from your primary Google Calendar.
+
+Use this after switching from `primary` to a separate `Moodle Deadlines` calendar:
+
+```text
+setupMoodleCalendar
+forceSyncMoodleCalendar
+cleanupPrimaryMoodleEvents
+```
+
+### `setupHourlyTrigger`
+
+Removes existing `syncMoodleCalendar` triggers and installs one hourly trigger.
+
+### `removeSyncTriggers`
+
+Deletes installed triggers for `syncMoodleCalendar`.
+
+### `listProjectTriggers`
+
+Logs installed project triggers.
 
 ### `cleanupMoodleCalendarDuplicates`
 
@@ -222,13 +367,74 @@ Logs module names that the script can infer automatically from the Moodle feed.
 - Google Calendar may take a short time to visually refresh after bulk updates/deletes.
 - Very frequent triggers can hit Apps Script or Google Calendar rate limits.
 
+## Troubleshooting
+
+### `Rate Limit Exceeded`
+
+Wait a few minutes and run again. The script uses retries, feed hashing, and content hashing to reduce writes, but large first syncs can still hit temporary limits.
+
+### Events are duplicated
+
+Run:
+
+```text
+cleanupMoodleCalendarDuplicates
+forceSyncMoodleCalendar
+```
+
+Then refresh Google Calendar or switch months and back.
+
+### Events are missing module names
+
+Run:
+
+```text
+inspectAmbiguousMoodleEvents
+inspectLearnedModuleNames
+```
+
+If Moodle does not expose the module in iCal, add the event to `MODULE_OVERRIDES`.
+
+### I changed Script Properties but nothing updated
+
+Run:
+
+```text
+forceSyncMoodleCalendar
+```
+
+Normal sync may skip work when the feed/config hash appears unchanged.
+
+### `Unknown command "clasp open"`
+
+This project uses clasp 3.x. Use:
+
+```bash
+npx clasp open-script
+```
+
+### Tests are being pushed to Apps Script
+
+The repo includes `.claspignore` so only these files should be pushed:
+
+```text
+Code.js
+appsscript.json
+```
+
+Check with:
+
+```bash
+npx clasp status
+```
+
 ## Recommended Workflow
 
 1. Run `inspectAmbiguousMoodleEvents`.
 2. Add missing module mappings to `MODULE_OVERRIDES`.
 3. Run `cleanupMoodleCalendarDuplicates`.
 4. Run `syncMoodleCalendar`.
-5. Add the hourly trigger.
+5. Run `setupHourlyTrigger`.
 
 ## License
 
