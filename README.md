@@ -150,6 +150,7 @@ Optional:
 MOODLE_CALENDAR_NAME  Moodle Deadlines
 MOODLE_CALENDAR_ID    primary
 REMINDER_MINUTES      [10080, 2880, 360]
+NOTIFY_EMAIL          you@example.com
 ```
 
 Recommended: leave `MOODLE_CALENDAR_ID` unset at first, then run `setupMoodleCalendar`. It creates or reuses a separate calendar and stores its ID automatically.
@@ -178,6 +179,7 @@ Use `primary` only if you intentionally want Moodle events in your main Google C
 | `MODULE_NAMES` | No | `{"CS3501":"Data Science and Engineering Project"}` | Manual module-name map. |
 | `MODULE_OVERRIDES` | No | `{"byTitle":{},"byUid":{}}` | Manual mappings for ambiguous Moodle events. |
 | `REMINDER_MINUTES` | No | `[10080,2880,360]` | Popup reminders before deadlines. |
+| `NOTIFY_EMAIL` | No | `you@example.com` | Sends one email summary when new or changed Moodle deadlines are synced. |
 
 ### 6. Add module names
 
@@ -353,6 +355,8 @@ If the Moodle feed and module configuration are unchanged, it skips Calendar API
 When the feed has changed, each event is still compared with a stored content hash so unchanged events are not rewritten.
 
 Synced events use popup reminders from `REMINDER_MINUTES`, or `[10080, 2880, 360]` by default.
+
+If `NOTIFY_EMAIL` is set, the script sends one email summary when a run creates new deadlines or updates existing ones. Dry runs, unchanged events, duplicate cleanup, and deleted old events do not send notifications.
 
 At the end of each run, the execution log shows a sync report with source, calendar ID, created/updated/deleted counts, skipped/unchanged counts, missing-module count, and trigger status.
 

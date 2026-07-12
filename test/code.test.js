@@ -2,9 +2,12 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const {
+  buildNotificationItem,
   countMissingModuleEvents,
   dedupeMoodleEvents,
   extractModuleCode,
+  formatNotificationBody,
+  formatNotificationSubject,
   formatSyncReport,
   formatCalendarValidationError,
   formatMoodleValidationError,
@@ -253,4 +256,44 @@ test('countMissingModuleEvents counts only in-window events without module codes
   ];
 
   assert.equal(countMissingModuleEvents(events, { byUid: {}, byTitle: {} }, now, horizon), 1);
+});
+
+test('notification formatters summarize Moodle changes', () => {
+  const items = [
+    {
+      action: 'New',
+      title: '[MA3024 Numerical Methods] Spot Quiz',
+      when: 'Tue, 7 Jul 2026, 3:00 PM',
+      moduleCode: 'MA3024',
+      moduleName: 'Numerical Methods',
+    },
+    {
+      action: 'Updated',
+      title: '[CS3501] Attendance',
+      when: 'Thu, 9 Jul 2026, 10:15 AM',
+      moduleCode: 'CS3501',
+      moduleName: '',
+    },
+  ];
+
+  assert.equal(formatNotificationSubject(items), 'Moodle Calendar: 2 deadline changes');
+  assert.match(formatNotificationBody(items), /New: \[MA3024 Numerical Methods\] Spot Quiz/);
+  assert.match(formatNotificationBody(items), /Module: MA3024 - Numerical Methods/);
+});
+
+test('buildNotificationItem reads module metadata from calendar resource', () => {
+  const item = buildNotificationItem('New', {
+    summary: '[MN3043] Self Assessment 01 closes',
+    start: { date: '2026-07-12' },
+    extendedProperties: {
+      private: {
+        moduleCode: 'MN3043',
+        moduleName: 'Business Economics and Financial Accounting',
+      },
+    },
+  }, 'Asia/Colombo');
+
+  assert.equal(item.action, 'New');
+  assert.equal(item.when, '2026-07-12');
+  assert.equal(item.moduleCode, 'MN3043');
 });

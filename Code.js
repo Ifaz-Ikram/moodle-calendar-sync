@@ -9,6 +9,7 @@ const PROP_MODULE_OVERRIDES = 'MODULE_OVERRIDES';
 const PROP_MODULE_NAMES = 'MODULE_NAMES';
 const PROP_REMINDER_MINUTES = 'REMINDER_MINUTES';
 const PROP_LAST_SYNC_HASH = 'LAST_SYNC_HASH';
+const PROP_NOTIFY_EMAIL = 'NOTIFY_EMAIL';
 const SYNC_TAG = 'MOODLE_SYNC_UID';
 const SOURCE_NAME = 'moodle-calendar-sync';
 const DEFAULT_MOODLE_CALENDAR_NAME = 'Moodle Deadlines';
@@ -241,6 +242,7 @@ function syncMoodleCalendarInternal(options) {
   const moduleOverrides = getModuleOverrides(props);
   const moduleNames = getModuleNames(props);
   const reminderMinutes = getReminderMinutes(props);
+  const notifyEmail = props.getProperty(PROP_NOTIFY_EMAIL);
 
   const source = loadMoodleEvents(props);
   const syncHash = createSyncHash(source.hashInput, moduleOverrides, moduleNames, reminderMinutes, source.source);
@@ -273,6 +275,7 @@ function syncMoodleCalendarInternal(options) {
   let skipped = 0;
   let unchanged = 0;
   const handledKeys = {};
+  const notificationItems = [];
 
   moodleEvents.forEach(function(event) {
     if (!event.uid || !event.start) {
@@ -306,6 +309,7 @@ function syncMoodleCalendarInternal(options) {
           Utilities.sleep(250);
         }
         logDryRunAction(dryRun, 'update', resource);
+        notificationItems.push(buildNotificationItem('Updated', resource, timezone));
         updated++;
       }
       existingByKey[resourceKey] = existingMatch;
@@ -318,12 +322,14 @@ function syncMoodleCalendarInternal(options) {
         Utilities.sleep(250);
       }
       logDryRunAction(dryRun, 'create', resource);
+      notificationItems.push(buildNotificationItem('New', resource, timezone));
       created++;
     }
   });
 
   if (!dryRun) {
     props.setProperty(PROP_LAST_SYNC_HASH, syncHash);
+    sendSyncNotifications(notifyEmail, notificationItems);
   }
   Logger.log(formatSyncReport({
     title: dryRun ? 'Moodle dry run complete' : 'Moodle sync complete',
@@ -369,6 +375,75 @@ function countMissingModuleEvents(events, moduleOverrides, now, horizon) {
       isInSyncWindow(event, now, horizon) &&
       !extractModuleCode(event, moduleOverrides);
   }).length;
+}
+
+function buildNotificationItem(action, resource, timezone) {
+  const privateProps = resource.extendedProperties && resource.extendedProperties.private || {};
+  return {
+    action: action,
+    title: resource.summary || 'Moodle event',
+    when: formatCalendarTimeForNotification(resource.start, timezone),
+    moduleCode: privateProps.moduleCode || '',
+    moduleName: privateProps.moduleName || '',
+  };
+}
+
+function sendSyncNotifications(email, items) {
+  if (!email || !items.length) {
+    return;
+  }
+
+  MailApp.sendEmail({
+    to: email,
+    subject: formatNotificationSubject(items),
+    body: formatNotificationBody(items),
+  });
+  Logger.log('Notification email sent to %s for %s Moodle change(s).', email, items.length);
+}
+
+function formatNotificationSubject(items) {
+  if (items.length === 1) {
+    return 'Moodle Calendar: ' + items[0].action + ' deadline';
+  }
+  return 'Moodle Calendar: ' + items.length + ' deadline changes';
+}
+
+function formatNotificationBody(items) {
+  const visibleItems = items.slice(0, 20);
+  const lines = [
+    'Moodle Calendar changes:',
+    '',
+  ];
+
+  visibleItems.forEach(function(item) {
+    lines.push(item.action + ': ' + item.title);
+    if (item.when) lines.push('Due: ' + item.when);
+    if (item.moduleCode || item.moduleName) {
+      lines.push('Module: ' + [item.moduleCode, item.moduleName].filter(Boolean).join(' - '));
+    }
+    lines.push('');
+  });
+
+  if (items.length > visibleItems.length) {
+    lines.push('And ' + (items.length - visibleItems.length) + ' more change(s).');
+    lines.push('');
+  }
+
+  lines.push('This email was sent by moodle-calendar-sync.');
+  return lines.join('\n');
+}
+
+function formatCalendarTimeForNotification(start, timezone) {
+  if (!start) {
+    return '';
+  }
+  if (start.date) {
+    return start.date;
+  }
+  if (!start.dateTime) {
+    return '';
+  }
+  return Utilities.formatDate(new Date(start.dateTime), timezone || 'UTC', 'EEE, d MMM yyyy, h:mm a');
 }
 
 function cleanupMoodleCalendarDuplicates() {
@@ -1183,7 +1258,10 @@ if (typeof module !== 'undefined' && module.exports) {
     countMissingModuleEvents,
     formatSyncReport,
     formatCalendarValidationError,
+    formatNotificationBody,
+    formatNotificationSubject,
     formatMoodleValidationError,
+    buildNotificationItem,
     getMoodleDataSource,
     getMoodleEventKey,
     learnModuleNames,
