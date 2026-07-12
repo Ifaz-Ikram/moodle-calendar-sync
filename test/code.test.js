@@ -7,7 +7,11 @@ const {
   countMissingModuleEvents,
   dateToUnixSeconds,
   dedupeMoodleEvents,
+  buildApiEventIndexes,
+  enrichMoodleEventWithApiCourseMetadata,
   extractModuleCode,
+  extractModuleCodeFromCourseFields,
+  extractModuleName,
   formatNotificationBody,
   formatNotificationSubject,
   formatSyncReport,
@@ -16,6 +20,7 @@ const {
   getMatchingDateKey,
   getMatchingEventKey,
   getMoodleDataSource,
+  getMoodleUrlId,
   getSyncWindowBounds,
   learnModuleNames,
   mergeMoodleEventSources,
@@ -23,6 +28,7 @@ const {
   normalizeTitleForKey,
   paginateMoodleApiEventPages,
   shouldRemoveMissingMoodleEvent,
+  shouldShowCourseLine,
   parseIcsEvents,
   stripHtml,
   unfoldIcsLines,
@@ -146,6 +152,55 @@ test('extractModuleCode prefers byUid and byTitle overrides', () => {
     extractModuleCode({ uid: 'other@online.uom.lk', summary: 'Answer Submission for Additional Questions is due' }, overrides),
     'MN3043'
   );
+});
+
+test('extractModuleCode prefers Moodle course metadata over byTitle overrides', () => {
+  const overrides = {
+    byUid: {},
+    byTitle: {
+      'project proposal - pdf submission is due': 'CS3880',
+    },
+  };
+  const event = {
+    uid: 'api:551637@online.uom.lk',
+    summary: 'Project Proposal - PDF Submission is due',
+    courseFullName: 'In23-S5-CS3631 - Deep Neural Networks',
+    courseShortName: 'In23-S5-CS3631 (33105)',
+  };
+
+  assert.equal(extractModuleCode(event, overrides), 'CS3631');
+});
+
+test('extractModuleCode prefers Moodle course metadata over unrelated description codes', () => {
+  const event = {
+    uid: 'api:551639@online.uom.lk',
+    summary: 'Short-Paper Submission is due',
+    description: 'Please submit a PDF version of your short paper for CS3880 Engineer and Society.',
+    courseFullName: 'In23-S5-CS3631 - Deep Neural Networks',
+    courseShortName: 'In23-S5-CS3631 (33105)',
+  };
+
+  assert.equal(extractModuleCode(event, { byUid: {}, byTitle: {} }), 'CS3631');
+  assert.equal(extractModuleName(event, 'CS3631'), 'Deep Neural Networks');
+});
+
+test('shouldShowCourseLine hides redundant course metadata when module already matches', () => {
+  const event = {
+    courseFullName: 'In23-S5-CS3631 - Deep Neural Networks',
+    courseShortName: 'In23-S5-CS3631 (33105)',
+  };
+
+  assert.equal(shouldShowCourseLine('CS3631', 'Deep Neural Networks', event), false);
+  assert.equal(shouldShowCourseLine('CS3631', '', event), false);
+});
+
+test('shouldShowCourseLine keeps full course label when module metadata is incomplete', () => {
+  const event = {
+    courseFullName: 'In23-S5-CS3631 - Deep Neural Networks',
+    courseShortName: 'In23-S5-CS3631 (33105)',
+  };
+
+  assert.equal(shouldShowCourseLine('', '', event), true);
 });
 
 test('normalizeTitleForKey ignores existing module prefixes', () => {
@@ -383,6 +438,62 @@ test('getMatchingEventKey matches API and Google Calendar title/date variants', 
   }, timezone);
 
   assert.equal(apiStyle, calendarStyle);
+});
+
+test('enrichMoodleEventWithApiCourseMetadata copies Moodle API course fields onto matching iCal events', () => {
+  const timezone = 'Asia/Colombo';
+  const apiIndexes = buildApiEventIndexes([{
+    uid: 'api:551637@online.uom.lk',
+    summary: 'Project Proposal - PDF Submission is due',
+    start: { dateTime: '2026-08-14T18:29:00Z', dateOnly: false },
+    courseFullName: 'In23-S5-CS3631 - Deep Neural Networks',
+    courseShortName: 'In23-S5-CS3631 (33105)',
+    url: 'https://online.uom.lk/mod/assign/view.php?id=551637',
+  }], timezone);
+
+  const enriched = enrichMoodleEventWithApiCourseMetadata({
+    uid: 'ical@online.uom.lk',
+    summary: 'Project Proposal - PDF Submission is due',
+    description: 'Please submit the project proposal as a PDF here for CS3880 Engineer and Society.',
+    start: { dateTime: '2026-08-14T23:59:00+05:30', dateOnly: false },
+    url: 'https://online.uom.lk/mod/assign/view.php?id=551637',
+  }, apiIndexes, timezone);
+
+  assert.equal(extractModuleCode(enriched, { byUid: {}, byTitle: {} }), 'CS3631');
+  assert.equal(extractModuleName(enriched, 'CS3631'), 'Deep Neural Networks');
+});
+
+test('mergeMoodleEventSources deduplicates API and iCal events before module titles are applied', () => {
+  const props = mockProps({
+    TIMEZONE: 'Asia/Colombo',
+    MODULE_NAMES: '{"CS3631":"Deep Neural Networks","CS3880":"Engineer and Society"}',
+  });
+  const apiResult = {
+    hashInput: 'api',
+    rawEvents: [{
+      uid: 'api:551637@online.uom.lk',
+      summary: 'Project Proposal - PDF Submission is due',
+      start: { dateTime: '2026-08-14T18:29:00Z', dateOnly: false },
+      courseFullName: 'In23-S5-CS3631 - Deep Neural Networks',
+      courseShortName: 'In23-S5-CS3631 (33105)',
+      url: 'https://online.uom.lk/mod/assign/view.php?id=551637',
+    }],
+  };
+  const icalResult = {
+    hashInput: 'ical',
+    rawEvents: [{
+      uid: 'ical@online.uom.lk',
+      summary: 'Project Proposal - PDF Submission is due',
+      description: 'Please submit the project proposal as a PDF here for CS3880 Engineer and Society.',
+      start: { dateTime: '2026-08-14T23:59:00+05:30', dateOnly: false },
+      url: 'https://online.uom.lk/mod/assign/view.php?id=551637',
+    }],
+  };
+  const merged = mergeMoodleEventSources(apiResult, icalResult, props);
+
+  assert.equal(merged.rawEvents.length, 1);
+  assert.equal(merged.rawEvents[0].uid, 'api:551637@online.uom.lk');
+  assert.equal(extractModuleCode(merged.rawEvents[0], { byUid: {}, byTitle: {} }), 'CS3631');
 });
 
 test('mergeMoodleEventSources prefers API events and keeps iCal-only events', () => {

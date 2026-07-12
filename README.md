@@ -187,7 +187,7 @@ Use `primary` only if you intentionally want Moodle events in your main Google C
 
 The script can automatically learn many module names from Moodle entries such as `CS3621 Data Mining (L)` or `In23-S5-MA3024 - Numerical Methods`.
 
-API mode usually gives better module details because Moodle returns `course.fullname` and `course.shortname` with each action event.
+API mode usually gives better module details because Moodle returns `course.fullname` and `course.shortname` with each action event. When those course fields are present, the script uses them as the source of truth for module codes and titles instead of scanning event descriptions.
 
 If you want to provide or override names manually, add a Script Property:
 
@@ -236,9 +236,16 @@ Example value:
 }
 ```
 
-Use `byTitle` when every event with that title belongs to the same module. Use `byUid` when only one specific Moodle event should be mapped.
+Use `byTitle` only when every event with that title belongs to the same module and Moodle does not provide course metadata. Do not use `byTitle` for generic assignment names such as `Code Submission is due` or `Attendance` when multiple modules share that title.
 
-This part cannot be fully automated from iCal alone when Moodle omits the course/module from the feed. If `MOODLE_DATA_SOURCE=api` works for your Moodle site, many `MODULE_OVERRIDES` entries become unnecessary because the API includes course metadata.
+Priority order:
+
+1. `byUid` for one specific Moodle event
+2. Moodle API `course.shortname` / `course.fullname`
+3. `byTitle` for iCal-only ambiguous events
+4. Automatic text detection
+
+If you use API mode, remove `byTitle` overrides for assignment deadlines that Moodle already links to a course. Wrong `byTitle` entries will force the wrong module even when Moodle returns the correct course.
 
 ### Moodle API token check
 
@@ -419,7 +426,7 @@ Run this manually if your calendar already contains duplicates.
 
 ### `inspectAmbiguousMoodleEvents`
 
-Logs Moodle events where the module code cannot be inferred.
+Logs Moodle events where the module code cannot be inferred from the same merged feed used by sync (API plus iCal supplement when configured).
 
 Use this to find UIDs for `MODULE_OVERRIDES`.
 

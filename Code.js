@@ -310,7 +310,10 @@ function syncMoodleCalendarInternal(options) {
     handledKeys[resourceKey] = true;
 
     if (existingMatch) {
-      if (getEventContentHash(existingMatch) === resource.extendedProperties.private.contentHash) {
+      if (
+        !eventNeedsModuleRepair(existingMatch, resource) &&
+        getEventContentHash(existingMatch) === resource.extendedProperties.private.contentHash
+      ) {
         unchanged++;
       } else {
         if (!dryRun) {
@@ -488,22 +491,20 @@ function cleanupMoodleCalendarDuplicates() {
 
 function inspectAmbiguousMoodleEvents() {
   const props = PropertiesService.getScriptProperties();
-  const icalUrl = props.getProperty(PROP_MOODLE_ICAL_URL);
   const moduleOverrides = getModuleOverrides(props);
+  const source = loadMoodleEvents(props);
+  const events = dedupeMoodleEvents(source.rawEvents || []);
 
-  if (!icalUrl) {
-    throw new Error('Missing script property: ' + PROP_MOODLE_ICAL_URL);
-  }
-
-  const events = dedupeMoodleEvents(parseIcsEvents(fetchIcs(icalUrl)));
+  Logger.log('Inspecting %s Moodle events from source: %s', events.length, source.source);
   events.forEach(function(event) {
     const moduleCode = extractModuleCode(event, moduleOverrides);
     if (!moduleCode) {
       Logger.log(
-        'Ambiguous Moodle event | title="%s" | uid="%s" | start="%s" | description="%s"',
+        'Ambiguous Moodle event | title="%s" | uid="%s" | start="%s" | course="%s" | description="%s"',
         event.summary || '',
         event.uid || '',
         getParsedDateKey(event.start),
+        event.courseFullName || event.courseShortName || '',
         shortenForLog(event.description || '')
       );
     }
@@ -512,13 +513,10 @@ function inspectAmbiguousMoodleEvents() {
 
 function inspectLearnedModuleNames() {
   const props = PropertiesService.getScriptProperties();
-  const icalUrl = props.getProperty(PROP_MOODLE_ICAL_URL);
+  const source = loadMoodleEvents(props);
+  const names = learnModuleNames(source.rawEvents || []);
 
-  if (!icalUrl) {
-    throw new Error('Missing script property: ' + PROP_MOODLE_ICAL_URL);
-  }
-
-  const names = learnModuleNames(parseIcsEvents(fetchIcs(icalUrl)));
+  Logger.log('Learned module names from source: %s', source.source);
   Logger.log(JSON.stringify(names, null, 2));
 }
 
@@ -578,10 +576,79 @@ function loadMoodleEvents(props) {
   return Object.assign(loadMoodleIcsEvents(props), { supplementWithIcal: false });
 }
 
+function getMoodleUrlId(url) {
+  const match = String(url || '').match(/[?&]id=(\d+)/);
+  return match ? match[1] : '';
+}
+
+function getNeutralMoodleMatchKey(event, timezone) {
+  const start = event.start.dateOnly
+    ? { date: event.start.date }
+    : { dateTime: event.start.dateTime };
+
+  return getMatchingEventKey({
+    summary: event.summary || 'Moodle event',
+    start: start,
+  }, timezone);
+}
+
+function buildApiEventIndexes(apiEvents, timezone) {
+  const byNeutralKey = {};
+  const byUrlId = {};
+
+  (apiEvents || []).forEach(function(event) {
+    if (!event || !event.start) {
+      return;
+    }
+
+    byNeutralKey[getNeutralMoodleMatchKey(event, timezone)] = event;
+    const urlId = getMoodleUrlId(event.url);
+    if (urlId) {
+      byUrlId[urlId] = event;
+    }
+  });
+
+  return {
+    byNeutralKey: byNeutralKey,
+    byUrlId: byUrlId,
+  };
+}
+
+function mergeEventCourseFields(target, source) {
+  if (!source || !source.courseFullName) {
+    return target;
+  }
+
+  return Object.assign({}, target, {
+    courseFullName: source.courseFullName,
+    courseShortName: source.courseShortName || target.courseShortName || '',
+    courseId: source.courseId || target.courseId || '',
+    url: target.url || source.url || '',
+  });
+}
+
+function enrichMoodleEventWithApiCourseMetadata(event, apiIndexes, timezone) {
+  if (!event || event.courseFullName) {
+    return event;
+  }
+
+  apiIndexes = apiIndexes || { byNeutralKey: {}, byUrlId: {} };
+  let apiEvent = apiIndexes.byNeutralKey[getNeutralMoodleMatchKey(event, timezone)];
+  if (!apiEvent) {
+    const urlId = getMoodleUrlId(event.url);
+    if (urlId) {
+      apiEvent = apiIndexes.byUrlId[urlId];
+    }
+  }
+
+  return mergeEventCourseFields(event, apiEvent);
+}
+
 function mergeMoodleEventSources(apiResult, icalResult, props) {
   const timezone = getScriptTimezone(props);
   const moduleOverrides = getModuleOverrides(props);
   const moduleNames = getModuleNames(props);
+  const apiIndexes = buildApiEventIndexes(apiResult.rawEvents || [], timezone);
   const byKey = {};
 
   function addEvent(event, prefer) {
@@ -589,9 +656,15 @@ function mergeMoodleEventSources(apiResult, icalResult, props) {
       return;
     }
 
-    const key = getMoodleMatchKey(event, timezone, moduleOverrides, moduleNames);
-    if (!byKey[key] || prefer) {
-      byKey[key] = event;
+    const neutralKey = getNeutralMoodleMatchKey(event, timezone);
+    const enriched = enrichMoodleEventWithApiCourseMetadata(event, apiIndexes, timezone);
+    if (!byKey[neutralKey] || prefer) {
+      byKey[neutralKey] = prefer ? event : enriched;
+      return;
+    }
+
+    if (!byKey[neutralKey].courseFullName && enriched.courseFullName) {
+      byKey[neutralKey] = mergeEventCourseFields(byKey[neutralKey], enriched);
     }
   }
 
@@ -873,6 +946,20 @@ function getMoodleMatchKey(event, timezone, moduleOverrides, moduleNames) {
   }, timezone);
 }
 
+function getExistingEventModuleCode(event) {
+  const privateProps = event.extendedProperties && event.extendedProperties.private;
+  return privateProps && privateProps.moduleCode;
+}
+
+function eventNeedsModuleRepair(existingMatch, resource) {
+  const existingModuleCode = getExistingEventModuleCode(existingMatch);
+  const newModuleCode = resource.extendedProperties &&
+    resource.extendedProperties.private &&
+    resource.extendedProperties.private.moduleCode;
+
+  return Boolean(existingModuleCode && newModuleCode && existingModuleCode !== newModuleCode);
+}
+
 function getMoodleVisibleKeys(events, moduleOverrides, moduleNames, timezone) {
   const keys = {};
   events.forEach(function(event) {
@@ -1015,7 +1102,9 @@ function buildCalendarResource(event, timezone, moduleOverrides, moduleNames, re
   } else if (moduleCode) {
     descriptionParts.push('Module: ' + moduleCode);
   }
-  if (event.courseFullName) descriptionParts.push('Course: ' + event.courseFullName);
+  if (shouldShowCourseLine(moduleCode, moduleName, event)) {
+    descriptionParts.push('Course: ' + event.courseFullName);
+  }
   if (event.description) descriptionParts.push(event.description);
   if (event.url) descriptionParts.push('Moodle: ' + event.url);
 
@@ -1087,10 +1176,24 @@ function formatEventTitle(event, moduleCode, moduleName) {
   return '[' + moduleLabel + '] ' + title;
 }
 
+function extractModuleCodeFromCourseFields(event) {
+  const courseText = [
+    event.courseShortName || '',
+    event.courseFullName || '',
+  ].join('\n');
+  const match = courseText.match(/\b[A-Z]{2,4}\s?\d{4}\b/);
+  return match ? match[0].replace(/\s+/g, '') : '';
+}
+
 function extractModuleCode(event, moduleOverrides) {
   const uidOverride = moduleOverrides.byUid[event.uid];
   if (uidOverride) {
     return uidOverride;
+  }
+
+  const fromCourse = extractModuleCodeFromCourseFields(event);
+  if (fromCourse) {
+    return fromCourse;
   }
 
   const titleOverride = moduleOverrides.byTitle[normalizeKeyPart(event.summary || '')];
@@ -1104,25 +1207,55 @@ function extractModuleCode(event, moduleOverrides) {
     event.location || '',
     event.url || '',
     event.uid || '',
-    event.courseFullName || '',
-    event.courseShortName || '',
   ].join('\n');
 
   const match = text.match(/\b[A-Z]{2,4}\s?\d{4}\b/);
   return match ? match[0].replace(/\s+/g, '') : '';
 }
 
+function extractModuleNameFromText(text, moduleCode) {
+  const escapedCode = moduleCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const match = String(text || '').match(new RegExp('\\b' + escapedCode + '\\b\\s*[-:]?\\s*([^\\n\\r\\(]+)', 'i'));
+  return match ? cleanModuleName(match[1]) : '';
+}
+
+function extractModuleNameFromCourseFields(event, moduleCode) {
+  return extractModuleNameFromText([
+    event.courseFullName || '',
+    event.courseShortName || '',
+  ].join('\n'), moduleCode);
+}
+
 function extractModuleName(event, moduleCode) {
-  const text = [
+  const fromCourse = extractModuleNameFromCourseFields(event, moduleCode);
+  if (fromCourse) {
+    return fromCourse;
+  }
+
+  return extractModuleNameFromText([
     event.summary || '',
     event.description || '',
     event.location || '',
     event.courseFullName || '',
     event.courseShortName || '',
-  ].join('\n');
-  const escapedCode = moduleCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = text.match(new RegExp('\\b' + escapedCode + '\\b\\s*[-:]?\\s*([^\\n\\r\\(]+)', 'i'));
-  return match ? match[1].trim() : '';
+  ].join('\n'), moduleCode);
+}
+
+function shouldShowCourseLine(moduleCode, moduleName, event) {
+  if (!event.courseFullName) {
+    return false;
+  }
+
+  const courseCode = extractModuleCodeFromCourseFields(event);
+  if (moduleCode && courseCode && moduleCode !== courseCode) {
+    return false;
+  }
+
+  if (moduleName && event.courseFullName.indexOf(moduleName) !== -1) {
+    return false;
+  }
+
+  return !moduleCode || event.courseFullName.indexOf(moduleCode) === -1;
 }
 
 function getModuleOverrides(props) {
@@ -1465,8 +1598,13 @@ if (typeof module !== 'undefined' && module.exports) {
     collectModuleNamesFromText,
     decodeIcsText,
     dedupeMoodleEvents,
+    buildApiEventIndexes,
+    enrichMoodleEventWithApiCourseMetadata,
     extractModuleCode,
+    extractModuleCodeFromCourseFields,
+    extractModuleName,
     countMissingModuleEvents,
+    eventNeedsModuleRepair,
     formatInstantInTimezone,
     formatSyncReport,
     formatCalendarValidationError,
@@ -1474,6 +1612,7 @@ if (typeof module !== 'undefined' && module.exports) {
     formatNotificationSubject,
     formatMoodleValidationError,
     buildNotificationItem,
+    buildApiEventIndexes,
     buildMoodleApiTimesortParams,
     dateToUnixSeconds,
     getMatchingDateKey,
@@ -1481,6 +1620,8 @@ if (typeof module !== 'undefined' && module.exports) {
     getMoodleDataSource,
     getMoodleEventKey,
     getMoodleMatchKey,
+    getMoodleUrlId,
+    getNeutralMoodleMatchKey,
     getSyncWindowBounds,
     learnModuleNames,
     mergeMoodleEventSources,
@@ -1489,6 +1630,7 @@ if (typeof module !== 'undefined' && module.exports) {
     normalizeTitleForKey,
     paginateMoodleApiEventPages,
     shouldRemoveMissingMoodleEvent,
+    shouldShowCourseLine,
     parseIcsDate,
     parseIcsEvents,
     stripHtml,
