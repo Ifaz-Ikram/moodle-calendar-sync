@@ -546,6 +546,16 @@ Logs module names that the script can infer automatically from the Moodle feed.
 
 ## Troubleshooting
 
+| Problem | Likely cause | Fix |
+| --- | --- | --- |
+| No module code/name | Moodle did not expose course metadata for that event | Run `inspectAmbiguousMoodleEvents`, then add `MODULE_OVERRIDES`. |
+| No notification email | No events were created/updated, or `NOTIFY_EMAIL` is not set | Check the sync report. Emails are only sent when `Created` or `Updated` is greater than 0. |
+| Duplicate events | Older sync runs created repeated Google Calendar events | Run `cleanupMoodleCalendarDuplicates`, then `forceSyncMoodleCalendar`. |
+| Token/API error | Moodle token expired, was revoked, or was copied incorrectly | Regenerate the Moodle token and update `MOODLE_TOKEN`. |
+| Calendar API error | Advanced Calendar service is not enabled or calendar ID is wrong | Enable `Services -> Google Calendar API`, then run `setupMoodleCalendar`. |
+| Changes do not appear | Feed/config hash skipped a normal sync | Run `forceSyncMoodleCalendar`. |
+| Events still look old | Google Calendar UI cache or existing event content has not been rewritten | Run `forceSyncMoodleCalendar`, then refresh Calendar or switch weeks/months. |
+
 ### `Rate Limit Exceeded`
 
 Wait a few minutes and run again. The script uses retries, feed hashing, and content hashing to reduce writes, but large first syncs can still hit temporary limits.
@@ -616,6 +626,28 @@ Check with:
 ```bash
 npx clasp status
 ```
+
+## Updating Safely
+
+When pulling a new version of this repo:
+
+```bash
+git pull
+npm install
+npm run ci
+npx clasp status
+npx clasp push --force
+```
+
+Then in Apps Script:
+
+```text
+validateConfig
+dryRunSyncMoodleCalendar
+forceSyncMoodleCalendar
+```
+
+If the update changes title formatting, colors, reminders, or module rules, use `forceSyncMoodleCalendar` so existing Google Calendar events are rewritten.
 
 ## Recommended Workflow
 
