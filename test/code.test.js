@@ -17,6 +17,7 @@ const {
   formatNotificationHtml,
   formatNotificationSubject,
   formatEventTitle,
+  formatSetupSummary,
   formatSyncReport,
   formatCalendarValidationError,
   formatMoodleValidationError,
@@ -354,6 +355,29 @@ test('validation error formatters include setup hints', () => {
     formatCalendarValidationError('primary', new Error('not found')),
     /Enable Services -> Google Calendar API/
   );
+});
+
+test('formatSetupSummary reports secret presence without printing secret values', () => {
+  const summary = formatSetupSummary({
+    dataSource: 'api',
+    apiBase: 'https://online.uom.lk',
+    hasMoodleToken: true,
+    hasIcalUrl: false,
+    timezone: 'Asia/Colombo',
+    calendarId: 'calendar-id',
+    calendarName: 'Moodle Deadlines',
+    notifyEmailSet: true,
+    moduleNamesSet: true,
+    moduleOverridesSet: false,
+    eventColorRulesSet: false,
+    reminderMinutes: [10080, 2880, 360],
+    triggerInstalled: true,
+  });
+
+  assert.match(summary, /Moodle token: set/);
+  assert.match(summary, /Moodle iCal URL: missing/);
+  assert.match(summary, /Hourly trigger installed: yes/);
+  assert.doesNotMatch(summary, /wstoken|privatetoken|PASTE_/i);
 });
 
 test('formatSyncReport includes operational sync counts', () => {

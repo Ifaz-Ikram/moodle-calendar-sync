@@ -145,6 +145,47 @@ function validateConfig() {
   Logger.log('Configuration validation complete.');
 }
 
+function printSetupSummary() {
+  const props = PropertiesService.getScriptProperties();
+  const calendarId = props.getProperty(PROP_MOODLE_CALENDAR_ID) || 'primary';
+  const summary = formatSetupSummary({
+    dataSource: getMoodleDataSource(props),
+    apiBase: getMoodleApiBase(props),
+    hasMoodleToken: Boolean(props.getProperty(PROP_MOODLE_TOKEN)),
+    hasIcalUrl: Boolean(props.getProperty(PROP_MOODLE_ICAL_URL)),
+    timezone: props.getProperty(PROP_TIMEZONE) || Session.getScriptTimeZone(),
+    calendarId: calendarId,
+    calendarName: props.getProperty(PROP_MOODLE_CALENDAR_NAME) || DEFAULT_MOODLE_CALENDAR_NAME,
+    notifyEmailSet: Boolean(props.getProperty(PROP_NOTIFY_EMAIL)),
+    moduleNamesSet: Boolean(props.getProperty(PROP_MODULE_NAMES)),
+    moduleOverridesSet: Boolean(props.getProperty(PROP_MODULE_OVERRIDES)),
+    eventColorRulesSet: Boolean(props.getProperty(PROP_EVENT_COLOR_RULES)),
+    reminderMinutes: getReminderMinutes(props),
+    triggerInstalled: hasSyncTrigger(),
+  });
+
+  Logger.log(summary);
+}
+
+function formatSetupSummary(summary) {
+  return [
+    'Moodle Calendar Sync setup summary',
+    'Data source: ' + summary.dataSource,
+    'Moodle API base: ' + summary.apiBase,
+    'Moodle token: ' + (summary.hasMoodleToken ? 'set' : 'missing'),
+    'Moodle iCal URL: ' + (summary.hasIcalUrl ? 'set' : 'missing'),
+    'Timezone: ' + summary.timezone,
+    'Google Calendar ID: ' + summary.calendarId,
+    'Google Calendar name: ' + summary.calendarName,
+    'Notification email: ' + (summary.notifyEmailSet ? 'set' : 'not set'),
+    'Module names: ' + (summary.moduleNamesSet ? 'set' : 'not set'),
+    'Module overrides: ' + (summary.moduleOverridesSet ? 'set' : 'not set'),
+    'Event color rules: ' + (summary.eventColorRulesSet ? 'set' : 'default'),
+    'Reminder minutes: ' + JSON.stringify(summary.reminderMinutes || []),
+    'Hourly trigger installed: ' + (summary.triggerInstalled ? 'yes' : 'no'),
+  ].join('\n');
+}
+
 function cleanupPrimaryMoodleEvents() {
   const props = PropertiesService.getScriptProperties();
   const icalUrl = props.getProperty(PROP_MOODLE_ICAL_URL);
@@ -1887,6 +1928,7 @@ if (typeof module !== 'undefined' && module.exports) {
     formatNotificationHtml,
     formatNotificationSubject,
     escapeHtml,
+    formatSetupSummary,
     formatEventTitle,
     formatMoodleValidationError,
     buildNotificationItem,

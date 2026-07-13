@@ -458,6 +458,12 @@ Sends a sample styled email to `NOTIFY_EMAIL`.
 
 Use this after enabling notification emails or after changing the email template.
 
+### `printSetupSummary`
+
+Logs a safe setup summary without printing Moodle tokens, private iCal URLs, or passwords.
+
+Use this when debugging setup or when asking for help in an issue.
+
 ### `setupMoodleCalendar`
 
 Creates or reuses a Google Calendar named `Moodle Deadlines` and stores its calendar ID in `MOODLE_CALENDAR_ID`.
@@ -624,6 +630,10 @@ npx clasp status
 Use the GitHub issue templates for setup problems, wrong module names, duplicate events, Moodle API/token problems, and feature requests.
 
 Never include Moodle tokens, private iCal URLs, passwords, or screenshots containing secrets in a public issue.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md).
 
 ## License
 
