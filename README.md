@@ -438,6 +438,8 @@ Synced events use popup reminders from `REMINDER_MINUTES`, or `[10080, 2880, 360
 
 If `NOTIFY_EMAIL` is set, the script sends one styled HTML email summary when a run creates new deadlines or updates existing ones. Dry runs, unchanged events, duplicate cleanup, and deleted old events do not send notifications.
 
+Run `sendTestNotification` to send a sample styled email without waiting for Moodle to change.
+
 At the end of each run, the execution log shows a sync report with source, calendar ID, created/updated/deleted counts, skipped/unchanged counts, missing-module count, and trigger status.
 
 ### `forceSyncMoodleCalendar`
@@ -449,6 +451,12 @@ Use this after changing Script Properties such as `MODULE_NAMES` or `MODULE_OVER
 ### `dryRunSyncMoodleCalendar`
 
 Previews creates, updates, duplicate deletes, and missing-event removals without changing Google Calendar.
+
+### `sendTestNotification`
+
+Sends a sample styled email to `NOTIFY_EMAIL`.
+
+Use this after enabling notification emails or after changing the email template.
 
 ### `setupMoodleCalendar`
 

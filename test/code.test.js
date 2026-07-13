@@ -26,6 +26,7 @@ const {
   getMatchingEventKey,
   getMoodleDataSource,
   getMoodleUrlId,
+  getSampleNotificationItems,
   getSyncWindowBounds,
   isScriptOwnedMoodleEvent,
   learnModuleNames,
@@ -430,6 +431,15 @@ test('formatNotificationHtml escapes event text', () => {
   assert.match(html, /&lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
   assert.match(html, /Numerical &amp; Methods/);
   assert.equal(escapeHtml(`A&B < "C"`), 'A&amp;B &lt; &quot;C&quot;');
+});
+
+test('getSampleNotificationItems provides realistic test email rows', () => {
+  const items = getSampleNotificationItems();
+
+  assert.equal(items.length, 2);
+  assert.equal(items[0].action, 'New');
+  assert.equal(items[1].action, 'Updated');
+  assert.match(formatNotificationHtml(items), /MA3024: Spot Quiz 02 closes/);
 });
 
 test('buildNotificationItem reads module metadata from calendar resource', () => {

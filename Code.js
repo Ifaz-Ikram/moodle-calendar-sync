@@ -61,6 +61,19 @@ function setup() {
   Logger.log('Then run forceSyncMoodleCalendar to create/update Google Calendar events.');
 }
 
+function sendTestNotification() {
+  const props = PropertiesService.getScriptProperties();
+  const email = props.getProperty(PROP_NOTIFY_EMAIL);
+  validateRequiredProperty(
+    PROP_NOTIFY_EMAIL,
+    email,
+    'Add your email address in Apps Script -> Project Settings -> Script Properties.'
+  );
+
+  sendSyncNotifications(email, getSampleNotificationItems());
+  Logger.log('Test notification sent to %s.', email);
+}
+
 function setupMoodleCalendar() {
   const props = PropertiesService.getScriptProperties();
   const timezone = props.getProperty(PROP_TIMEZONE) || Session.getScriptTimeZone();
@@ -433,6 +446,25 @@ function sendSyncNotifications(email, items) {
     htmlBody: formatNotificationHtml(items),
   });
   Logger.log('Notification email sent to %s for %s Moodle change(s).', email, items.length);
+}
+
+function getSampleNotificationItems() {
+  return [
+    {
+      action: 'New',
+      title: 'MA3024: Spot Quiz 02 closes',
+      when: 'Tue, 14 Jul 2026, 3:00 PM',
+      moduleCode: 'MA3024',
+      moduleName: 'Numerical Methods',
+    },
+    {
+      action: 'Updated',
+      title: 'CS3501: Project Proposal Submission is due',
+      when: 'Wed, 15 Jul 2026, 11:59 PM',
+      moduleCode: 'CS3501',
+      moduleName: 'Data Science and Engineering Project',
+    },
+  ];
 }
 
 function formatNotificationSubject(items) {
@@ -1831,6 +1863,7 @@ if (typeof module !== 'undefined' && module.exports) {
     getMoodleMatchKey,
     getMoodleUrlId,
     getNeutralMoodleMatchKey,
+    getSampleNotificationItems,
     getSyncWindowBounds,
     isScriptOwnedMoodleEvent,
     learnModuleNames,
