@@ -1,0 +1,28 @@
+name: Moodle token or API problem
+description: Moodle API token generation or API sync is failing.
+title: "Moodle API/token: "
+labels: ["moodle-api"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never paste your Moodle token, private token, password, or full private iCal URL.
+        If a token was exposed, revoke/regenerate it before continuing.
+  - type: textarea
+    id: error
+    attributes:
+      label: Error message
+      description: Paste sanitized curl or Apps Script error output.
+      render: text
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: Moodle mobile app works for my account.
+        - label: login/token.php returned a token.
+        - label: core_webservice_get_site_info works with the token.
+        - label: core_calendar_get_action_events_by_timesort works with the token.
+        - label: I removed all tokens/passwords/private URLs from this issue.

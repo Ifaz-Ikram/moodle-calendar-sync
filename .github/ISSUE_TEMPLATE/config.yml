@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security or token exposure
+    url: https://github.com/
+    about: Do not paste tokens in issues. Revoke/regenerate exposed Moodle tokens first.

@@ -10,6 +10,7 @@ const PROP_MODULE_NAMES = 'MODULE_NAMES';
 const PROP_REMINDER_MINUTES = 'REMINDER_MINUTES';
 const PROP_LAST_SYNC_HASH = 'LAST_SYNC_HASH';
 const PROP_NOTIFY_EMAIL = 'NOTIFY_EMAIL';
+const PROP_EVENT_COLOR_RULES = 'EVENT_COLOR_RULES';
 const SYNC_TAG = 'MOODLE_SYNC_UID';
 const SOURCE_NAME = 'moodle-calendar-sync';
 const DEFAULT_MOODLE_CALENDAR_NAME = 'Moodle Deadlines';
@@ -17,6 +18,21 @@ const DEFAULT_MOODLE_API_BASE = 'https://online.uom.lk';
 const DATA_SOURCE_API = 'api';
 const DATA_SOURCE_ICAL = 'ical';
 const DEFAULT_REMINDER_MINUTES = [10080, 2880, 360];
+const DEFAULT_EVENT_COLOR_RULES = {
+  byKeyword: {
+    attendance: '7',
+    quiz: '5',
+    assignment: '11',
+    submission: '11',
+    assessment: '6',
+    lecture: '9',
+    lab: '10',
+    practical: '10',
+    exam: '4',
+  },
+  byModule: {},
+  byEventType: {},
+};
 const SYNC_TRIGGER_HANDLER = 'syncMoodleCalendar';
 const SYNC_START_DATE = '2026-07-01';
 const SYNC_END_DATE = '2028-06-30';
@@ -88,6 +104,7 @@ function validateConfig() {
   validateJsonProperty(PROP_MODULE_NAMES, props.getProperty(PROP_MODULE_NAMES), 'object');
   validateJsonProperty(PROP_MODULE_OVERRIDES, props.getProperty(PROP_MODULE_OVERRIDES), 'object');
   validateJsonProperty(PROP_REMINDER_MINUTES, props.getProperty(PROP_REMINDER_MINUTES), 'array');
+  validateJsonProperty(PROP_EVENT_COLOR_RULES, props.getProperty(PROP_EVENT_COLOR_RULES), 'object');
 
   let source;
   try {
@@ -109,6 +126,7 @@ function validateConfig() {
   Logger.log('Google Calendar access OK: %s (%s)', calendar.summary, calendar.id);
   Logger.log('Timezone: %s', timezone);
   Logger.log('Reminder minutes: %s', JSON.stringify(getReminderMinutes(props)));
+  Logger.log('Event color rules: %s', JSON.stringify(getEventColorRules(props)));
   Logger.log('Moodle data source: %s', dataSource);
   Logger.log('Sync trigger installed: %s', hasSyncTrigger() ? 'yes' : 'no');
   Logger.log('Configuration validation complete.');
@@ -244,9 +262,10 @@ function syncMoodleCalendarInternal(options) {
   const moduleNames = getModuleNames(props);
   const reminderMinutes = getReminderMinutes(props);
   const notifyEmail = props.getProperty(PROP_NOTIFY_EMAIL);
+  const colorRules = getEventColorRules(props);
 
   const source = loadMoodleEvents(props);
-  const syncHash = createSyncHash(source.hashInput, moduleOverrides, moduleNames, reminderMinutes, source.source);
+  const syncHash = createSyncHash(source.hashInput, moduleOverrides, moduleNames, reminderMinutes, source.source, colorRules);
   if (!force && props.getProperty(PROP_LAST_SYNC_HASH) === syncHash) {
     Logger.log('Moodle sync skipped. Feed and module configuration unchanged.');
     return;
@@ -299,7 +318,7 @@ function syncMoodleCalendarInternal(options) {
     }
 
     const existing = existingByUid[event.uid];
-    const resource = buildCalendarResource(event, timezone, moduleOverrides, moduleNames, reminderMinutes);
+    const resource = buildCalendarResource(event, timezone, moduleOverrides, moduleNames, reminderMinutes, colorRules);
     const resourceKey = getResourceKey(resource, timezone);
     const existingMatch = existing || existingByKey[resourceKey];
 
@@ -487,6 +506,34 @@ function cleanupMoodleCalendarDuplicates() {
   const deleted = cleanupDuplicateSyncedEvents(calendarId, existing.duplicates);
 
   Logger.log('Duplicate cleanup complete. Deleted: %s', deleted);
+}
+
+function resetSyncState() {
+  PropertiesService.getScriptProperties().deleteProperty(PROP_LAST_SYNC_HASH);
+  Logger.log('Sync state reset. Next sync will not use the cached feed hash.');
+}
+
+function deleteAllSyncedMoodleEvents() {
+  const props = PropertiesService.getScriptProperties();
+  const calendarId = props.getProperty(PROP_MOODLE_CALENDAR_ID) || 'primary';
+  const now = new Date(SYNC_START_DATE + 'T00:00:00Z');
+  const horizon = new Date(SYNC_END_DATE + 'T23:59:59Z');
+  const events = findScriptOwnedMoodleEvents(calendarId, now, horizon);
+  const deleted = removeCalendarEvents(calendarId, events, false);
+
+  props.deleteProperty(PROP_LAST_SYNC_HASH);
+  Logger.log('Deleted all synced Moodle events from %s. Deleted: %s. Sync state reset.', calendarId, deleted);
+}
+
+function dryRunDeleteAllSyncedMoodleEvents() {
+  const props = PropertiesService.getScriptProperties();
+  const calendarId = props.getProperty(PROP_MOODLE_CALENDAR_ID) || 'primary';
+  const now = new Date(SYNC_START_DATE + 'T00:00:00Z');
+  const horizon = new Date(SYNC_END_DATE + 'T23:59:59Z');
+  const events = findScriptOwnedMoodleEvents(calendarId, now, horizon);
+  const deleted = removeCalendarEvents(calendarId, events, true);
+
+  Logger.log('Dry run delete all synced Moodle events from %s. Would delete: %s', calendarId, deleted);
 }
 
 function inspectAmbiguousMoodleEvents() {
@@ -846,13 +893,14 @@ function fetchIcs(url) {
   return response.getContentText();
 }
 
-function createSyncHash(sourceText, moduleOverrides, moduleNames, reminderMinutes, sourceName) {
+function createSyncHash(sourceText, moduleOverrides, moduleNames, reminderMinutes, sourceName, colorRules) {
   return createHash([
     sourceName || '',
     sourceText,
     JSON.stringify(moduleOverrides),
     JSON.stringify(moduleNames),
     JSON.stringify(reminderMinutes),
+    JSON.stringify(colorRules || {}),
     SYNC_START_DATE,
     SYNC_END_DATE,
   ].join('\n'));
@@ -1092,10 +1140,11 @@ function shortenForLog(value) {
   return String(value).replace(/\s+/g, ' ').slice(0, 300);
 }
 
-function buildCalendarResource(event, timezone, moduleOverrides, moduleNames, reminderMinutes) {
+function buildCalendarResource(event, timezone, moduleOverrides, moduleNames, reminderMinutes, colorRules) {
   const moduleCode = extractModuleCode(event, moduleOverrides);
   const moduleName = moduleCode ? moduleNames[moduleCode] || extractModuleName(event, moduleCode) : '';
   const title = formatEventTitle(event, moduleCode, moduleName);
+  const colorId = getEventColorId(event, moduleCode, colorRules);
   const descriptionParts = [];
   if (moduleCode && moduleName) {
     descriptionParts.push('Module: ' + moduleCode + ' - ' + moduleName);
@@ -1108,7 +1157,7 @@ function buildCalendarResource(event, timezone, moduleOverrides, moduleNames, re
   if (event.description) descriptionParts.push(event.description);
   if (event.url) descriptionParts.push('Moodle: ' + event.url);
 
-  const contentHash = createEventContentHash(event, title, moduleCode, moduleName, reminderMinutes);
+  const contentHash = createEventContentHash(event, title, moduleCode, moduleName, reminderMinutes, colorId);
   const resource = {
     summary: title,
     description: descriptionParts.join('\n\n'),
@@ -1132,6 +1181,9 @@ function buildCalendarResource(event, timezone, moduleOverrides, moduleNames, re
       },
     },
   };
+  if (colorId) {
+    resource.colorId = colorId;
+  }
 
   if (event.start.dateOnly) {
     resource.start = { date: event.start.date };
@@ -1144,7 +1196,7 @@ function buildCalendarResource(event, timezone, moduleOverrides, moduleNames, re
   return resource;
 }
 
-function createEventContentHash(event, title, moduleCode, moduleName, reminderMinutes) {
+function createEventContentHash(event, title, moduleCode, moduleName, reminderMinutes, colorId) {
   return createHash([
     event.uid || '',
     title || '',
@@ -1159,6 +1211,7 @@ function createEventContentHash(event, title, moduleCode, moduleName, reminderMi
     getParsedDateKey(event.start),
     getParsedDateKey(event.end),
     JSON.stringify(reminderMinutes || []),
+    colorId || '',
   ].join('\n'));
 }
 
@@ -1172,8 +1225,7 @@ function formatEventTitle(event, moduleCode, moduleName) {
   if (!moduleCode || title.indexOf(moduleCode) !== -1) {
     return title;
   }
-  const moduleLabel = moduleName ? moduleCode + ' ' + moduleName : moduleCode;
-  return '[' + moduleLabel + '] ' + title;
+  return moduleCode + ': ' + title;
 }
 
 function extractModuleCodeFromCourseFields(event) {
@@ -1283,6 +1335,57 @@ function getModuleNames(props) {
     return {};
   }
   return JSON.parse(raw);
+}
+
+function getEventColorRules(props) {
+  const raw = props.getProperty(PROP_EVENT_COLOR_RULES);
+  if (!raw) {
+    return DEFAULT_EVENT_COLOR_RULES;
+  }
+
+  const parsed = JSON.parse(raw);
+  return {
+    byKeyword: Object.assign({}, DEFAULT_EVENT_COLOR_RULES.byKeyword, parsed.byKeyword || {}),
+    byModule: parsed.byModule || {},
+    byEventType: parsed.byEventType || {},
+  };
+}
+
+function getEventColorId(event, moduleCode, colorRules) {
+  const rules = colorRules || DEFAULT_EVENT_COLOR_RULES;
+  const byModule = rules.byModule || {};
+  const byEventType = rules.byEventType || {};
+  const byKeyword = rules.byKeyword || {};
+
+  if (moduleCode && byModule[moduleCode]) {
+    return normalizeColorId(byModule[moduleCode]);
+  }
+
+  const eventType = normalizeKeyPart(event.eventType || '');
+  if (eventType && byEventType[eventType]) {
+    return normalizeColorId(byEventType[eventType]);
+  }
+
+  const text = normalizeKeyPart([
+    event.summary || '',
+    event.description || '',
+    event.moduleName || '',
+    event.actionName || '',
+  ].join(' '));
+  const keywords = Object.keys(byKeyword);
+  for (let i = 0; i < keywords.length; i++) {
+    const keyword = normalizeKeyPart(keywords[i]);
+    if (keyword && text.indexOf(keyword) !== -1) {
+      return normalizeColorId(byKeyword[keywords[i]]);
+    }
+  }
+
+  return '';
+}
+
+function normalizeColorId(value) {
+  const colorId = String(value || '').trim();
+  return /^(?:[1-9]|1[01])$/.test(colorId) ? colorId : '';
 }
 
 function getMoodleDataSource(props) {
@@ -1405,7 +1508,9 @@ function normalizeKeyPart(value) {
 }
 
 function normalizeTitleForKey(value) {
-  return normalizeKeyPart(value).replace(/^\[[a-z]{2,4}\d{4}[^\]]*\]\s*/, '');
+  return normalizeKeyPart(value)
+    .replace(/^\[[a-z]{2,4}\d{4}[^\]]*\]\s*/, '')
+    .replace(/^[a-z]{2,4}\d{4}\s*:\s*/, '');
 }
 
 function isInSyncWindow(event, now, horizon) {
@@ -1499,6 +1604,37 @@ function findExistingMoodleEvents(calendarId, timeMin, timeMax, moodleVisibleKey
   };
 }
 
+function findScriptOwnedMoodleEvents(calendarId, timeMin, timeMax) {
+  const events = [];
+  let pageToken;
+
+  do {
+    const result = Calendar.Events.list(calendarId, {
+      timeMin: timeMin.toISOString(),
+      timeMax: timeMax.toISOString(),
+      singleEvents: true,
+      showDeleted: false,
+      maxResults: 2500,
+      pageToken: pageToken,
+    });
+
+    (result.items || []).forEach(function(event) {
+      if (isScriptOwnedMoodleEvent(event)) {
+        events.push(event);
+      }
+    });
+
+    pageToken = result.nextPageToken;
+  } while (pageToken);
+
+  return events;
+}
+
+function isScriptOwnedMoodleEvent(event) {
+  const privateProps = event && event.extendedProperties && event.extendedProperties.private;
+  return Boolean(privateProps && privateProps.source === SOURCE_NAME);
+}
+
 function shouldRemoveMissingMoodleEvent(item, moodleUids, moodleVisibleKeys, options) {
   if (item.uid && moodleUids[item.uid]) {
     return false;
@@ -1542,14 +1678,23 @@ function removeMissingMoodleEvents(calendarId, existingEvents, moodleUids, moodl
 }
 
 function removeExistingMoodleEvents(calendarId, existingEvents) {
+  return removeCalendarEvents(calendarId, (existingEvents || []).map(function(item) {
+    return item.event;
+  }), false);
+}
+
+function removeCalendarEvents(calendarId, events, dryRun) {
   let deleted = 0;
 
-  (existingEvents || []).forEach(function(item) {
-    callCalendarWithRetry(function() {
-      return Calendar.Events.remove(calendarId, item.event.id);
-    });
+  (events || []).forEach(function(event) {
+    if (!dryRun) {
+      callCalendarWithRetry(function() {
+        return Calendar.Events.remove(calendarId, event.id);
+      });
+      Utilities.sleep(250);
+    }
+    logDryRunAction(dryRun, 'delete synced event', event);
     deleted++;
-    Utilities.sleep(250);
   });
 
   return deleted;
@@ -1610,6 +1755,7 @@ if (typeof module !== 'undefined' && module.exports) {
     formatCalendarValidationError,
     formatNotificationBody,
     formatNotificationSubject,
+    formatEventTitle,
     formatMoodleValidationError,
     buildNotificationItem,
     buildApiEventIndexes,
@@ -1617,12 +1763,15 @@ if (typeof module !== 'undefined' && module.exports) {
     dateToUnixSeconds,
     getMatchingDateKey,
     getMatchingEventKey,
+    getEventColorId,
+    getEventColorRules,
     getMoodleDataSource,
     getMoodleEventKey,
     getMoodleMatchKey,
     getMoodleUrlId,
     getNeutralMoodleMatchKey,
     getSyncWindowBounds,
+    isScriptOwnedMoodleEvent,
     learnModuleNames,
     mergeMoodleEventSources,
     normalizeMoodleApiEvent,

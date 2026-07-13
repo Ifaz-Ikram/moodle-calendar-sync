@@ -1,0 +1,44 @@
+name: Setup problem
+description: Something failed while setting up Apps Script, clasp, triggers, or Script Properties.
+title: "Setup problem: "
+labels: ["setup"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste Moodle tokens, private iCal URLs, passwords, or screenshots containing secrets.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the setup step that failed.
+      placeholder: "Example: validateConfig fails after I added Script Properties."
+    validations:
+      required: true
+  - type: dropdown
+    id: data-source
+    attributes:
+      label: Moodle data source
+      options:
+        - API
+        - iCal
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: execution-log
+    attributes:
+      label: Apps Script execution log
+      description: Paste only the error text. Remove tokens, private URLs, and account details.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Checklist
+      options:
+        - label: I enabled the advanced Google Calendar API service in Apps Script.
+        - label: I added Script Properties in Apps Script Project Settings.
+        - label: I ran setup or validateConfig.
+        - label: I removed any private tokens/URLs from this issue.

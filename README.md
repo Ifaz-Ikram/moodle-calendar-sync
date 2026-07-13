@@ -1,5 +1,7 @@
 # Moodle Calendar Sync
 
+[![CI](https://github.com/Ifaz-Ikram/moodle-calendar-sync/actions/workflows/ci.yml/badge.svg)](https://github.com/Ifaz-Ikram/moodle-calendar-sync/actions/workflows/ci.yml)
+
 Sync Moodle calendar deadlines into Google Calendar using Google Apps Script.
 
 This project is built for a personal/student workflow:
@@ -21,6 +23,7 @@ It does not need a server, database, or paid hosting. Apps Script runs the sync 
 - Removes synced Google Calendar events that disappear from the Moodle feed.
 - Deduplicates repeated Moodle events.
 - Learns module names from Moodle event titles/descriptions where possible.
+- Adds concise module prefixes to synced titles, such as `CS3501: Attendance`.
 - Skips Calendar API work when the Moodle feed and module configuration have not changed.
 - Skips updating individual Google Calendar events when their content has not changed.
 - Can create and use a separate Google Calendar for Moodle deadlines.
@@ -153,6 +156,7 @@ MOODLE_CALENDAR_NAME  Moodle Deadlines
 MOODLE_CALENDAR_ID    primary
 REMINDER_MINUTES      [10080, 2880, 360]
 NOTIFY_EMAIL          you@example.com
+EVENT_COLOR_RULES     {"byKeyword":{"quiz":"5"},"byModule":{"CS3501":"9"}}
 ```
 
 Recommended: leave `MOODLE_CALENDAR_ID` unset at first, then run `setupMoodleCalendar`. It creates or reuses a separate calendar and stores its ID automatically.
@@ -182,12 +186,58 @@ Use `primary` only if you intentionally want Moodle events in your main Google C
 | `MODULE_OVERRIDES` | No | `{"byTitle":{},"byUid":{}}` | Manual mappings for ambiguous Moodle events. |
 | `REMINDER_MINUTES` | No | `[10080,2880,360]` | Popup reminders before deadlines. |
 | `NOTIFY_EMAIL` | No | `you@example.com` | Sends one email summary when new or changed Moodle deadlines are synced. |
+| `EVENT_COLOR_RULES` | No | `{"byKeyword":{"quiz":"5"}}` | Google Calendar event colors by keyword, module, or Moodle event type. |
 
 ### 6. Add module names
 
 The script can automatically learn many module names from Moodle entries such as `CS3621 Data Mining (L)` or `In23-S5-MA3024 - Numerical Methods`.
 
 API mode usually gives better module details because Moodle returns `course.fullname` and `course.shortname` with each action event. When those course fields are present, the script uses them as the source of truth for module codes and titles instead of scanning event descriptions.
+
+Synced Google Calendar titles use the module code as a short prefix when the original Moodle title does not already include it:
+
+```text
+Attendance -> CS3501: Attendance
+Self Assessment 01 closes -> MN3043: Self Assessment 01 closes
+```
+
+The full module name is still stored in the event description.
+
+### Event colors
+
+The script assigns default Google Calendar colors for common Moodle event types:
+
+```text
+attendance, quiz, assignment, submission, assessment, lecture, lab, practical, exam
+```
+
+To customize colors, add a Script Property:
+
+```text
+EVENT_COLOR_RULES
+```
+
+Example value:
+
+```json
+{
+  "byModule": {
+    "CS3501": "9",
+    "MA3024": "5"
+  },
+  "byKeyword": {
+    "attendance": "7",
+    "quiz": "5",
+    "submission": "11",
+    "exam": "4"
+  },
+  "byEventType": {
+    "due": "11"
+  }
+}
+```
+
+Google Calendar color IDs are numbers from `"1"` to `"11"`. Module rules win first, then Moodle event type, then keyword rules.
 
 If you want to provide or override names manually, add a Script Property:
 
@@ -424,6 +474,28 @@ Deletes duplicate Google Calendar events created by previous sync runs.
 
 Run this manually if your calendar already contains duplicates.
 
+### `resetSyncState`
+
+Clears the cached feed hash. The next normal sync will re-check Moodle and Google Calendar even if Moodle appears unchanged.
+
+### `dryRunDeleteAllSyncedMoodleEvents`
+
+Logs synced Moodle events that would be deleted from the configured Moodle calendar.
+
+This only targets events with this script's hidden metadata.
+
+### `deleteAllSyncedMoodleEvents`
+
+Deletes all synced Moodle events from the configured Moodle calendar and clears the cached sync state.
+
+Use this when testing or when you want to rebuild the synced calendar from scratch:
+
+```text
+dryRunDeleteAllSyncedMoodleEvents
+deleteAllSyncedMoodleEvents
+forceSyncMoodleCalendar
+```
+
 ### `inspectAmbiguousMoodleEvents`
 
 Logs Moodle events where the module code cannot be inferred from the same merged feed used by sync (API plus iCal supplement when configured).
@@ -458,6 +530,18 @@ forceSyncMoodleCalendar
 ```
 
 Then refresh Google Calendar or switch months and back.
+
+### I want to rebuild the Moodle calendar from scratch
+
+Run:
+
+```text
+dryRunDeleteAllSyncedMoodleEvents
+deleteAllSyncedMoodleEvents
+forceSyncMoodleCalendar
+```
+
+This only deletes events created by this script in the configured Moodle calendar.
 
 ### Events are missing module names
 
@@ -510,6 +594,12 @@ npx clasp status
 3. Run `dryRunSyncMoodleCalendar`.
 4. Run `forceSyncMoodleCalendar`.
 5. Run `inspectAmbiguousMoodleEvents` only if some events still miss module details.
+
+## Reporting Issues
+
+Use the GitHub issue templates for setup problems, wrong module names, duplicate events, Moodle API/token problems, and feature requests.
+
+Never include Moodle tokens, private iCal URLs, passwords, or screenshots containing secrets in a public issue.
 
 ## License
 

@@ -1,0 +1,33 @@
+name: Duplicate events
+description: Google Calendar shows repeated Moodle events.
+title: "Duplicate events: "
+labels: ["duplicates"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste tokens or private URLs.
+  - type: textarea
+    id: duplicate-description
+    attributes:
+      label: What is duplicated?
+      placeholder: "Example: MN3043: Self Assessment 01 appears 5 times on 12 July."
+    validations:
+      required: true
+  - type: textarea
+    id: sync-log
+    attributes:
+      label: Latest sync report
+      description: Paste the final Moodle sync report from Apps Script logs.
+      render: text
+    validations:
+      required: false
+  - type: checkboxes
+    id: tried
+    attributes:
+      label: Tried already
+      options:
+        - label: I ran cleanupMoodleCalendarDuplicates.
+        - label: I ran forceSyncMoodleCalendar.
+        - label: I refreshed Google Calendar or switched months and back.
+        - label: I removed secrets from this issue.

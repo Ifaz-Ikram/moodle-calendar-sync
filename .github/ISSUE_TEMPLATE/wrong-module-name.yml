@@ -1,0 +1,50 @@
+name: Wrong or missing module name
+description: A synced event has the wrong module code/name or no module details.
+title: "Module mapping: "
+labels: ["module-mapping"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not paste Moodle tokens or private iCal URLs. UIDs are usually okay, but remove anything that looks like a secret.
+  - type: input
+    id: event-title
+    attributes:
+      label: Google Calendar event title
+      placeholder: "Example: Attendance"
+    validations:
+      required: true
+  - type: input
+    id: expected-module
+    attributes:
+      label: Expected module
+      placeholder: "Example: CS3501 - Data Science and Engineering Project"
+    validations:
+      required: true
+  - type: dropdown
+    id: data-source
+    attributes:
+      label: Moodle data source
+      options:
+        - API
+        - API + iCal supplement
+        - iCal
+        - Not sure
+    validations:
+      required: true
+  - type: textarea
+    id: inspect-output
+    attributes:
+      label: inspectAmbiguousMoodleEvents output
+      description: Paste relevant lines only. Remove secrets.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: overrides
+    attributes:
+      label: MODULE_OVERRIDES, if used
+      description: Paste sanitized JSON only.
+      render: json
+    validations:
+      required: false

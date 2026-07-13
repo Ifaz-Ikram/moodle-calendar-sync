@@ -14,14 +14,18 @@ const {
   extractModuleName,
   formatNotificationBody,
   formatNotificationSubject,
+  formatEventTitle,
   formatSyncReport,
   formatCalendarValidationError,
   formatMoodleValidationError,
+  getEventColorId,
+  getEventColorRules,
   getMatchingDateKey,
   getMatchingEventKey,
   getMoodleDataSource,
   getMoodleUrlId,
   getSyncWindowBounds,
+  isScriptOwnedMoodleEvent,
   learnModuleNames,
   mergeMoodleEventSources,
   normalizeMoodleApiEvent,
@@ -212,6 +216,70 @@ test('normalizeTitleForKey ignores existing module prefixes', () => {
     normalizeTitleForKey('[CS3501] Attendance'),
     'attendance'
   );
+  assert.equal(
+    normalizeTitleForKey('CS3501: Attendance'),
+    'attendance'
+  );
+});
+
+test('formatEventTitle uses concise module code prefixes', () => {
+  assert.equal(
+    formatEventTitle({ summary: 'Attendance' }, 'CS3501', 'Data Science and Engineering Project'),
+    'CS3501: Attendance'
+  );
+  assert.equal(
+    formatEventTitle({ summary: 'CS3501 Attendance' }, 'CS3501', 'Data Science and Engineering Project'),
+    'CS3501 Attendance'
+  );
+});
+
+test('getEventColorId applies default keyword rules', () => {
+  assert.equal(
+    getEventColorId({ summary: 'Spot Quiz 02 closes' }, '', getEventColorRules(mockProps({}))),
+    '5'
+  );
+  assert.equal(
+    getEventColorId({ summary: 'Attendance' }, '', getEventColorRules(mockProps({}))),
+    '7'
+  );
+});
+
+test('getEventColorId prefers module and event type rules before keywords', () => {
+  const rules = getEventColorRules(mockProps({
+    EVENT_COLOR_RULES: JSON.stringify({
+      byModule: { CS3501: '9' },
+      byEventType: { due: '4' },
+      byKeyword: { quiz: '5' },
+    }),
+  }));
+
+  assert.equal(getEventColorId({ summary: 'Quiz', eventType: 'due' }, 'CS3501', rules), '9');
+  assert.equal(getEventColorId({ summary: 'Quiz', eventType: 'due' }, '', rules), '4');
+  assert.equal(getEventColorId({ summary: 'Quiz', eventType: '' }, '', rules), '5');
+});
+
+test('getEventColorId ignores invalid color ids', () => {
+  const rules = getEventColorRules(mockProps({
+    EVENT_COLOR_RULES: JSON.stringify({
+      byKeyword: { quiz: '99' },
+    }),
+  }));
+
+  assert.equal(getEventColorId({ summary: 'Quiz' }, '', rules), '');
+});
+
+test('isScriptOwnedMoodleEvent only matches hidden source metadata', () => {
+  assert.equal(isScriptOwnedMoodleEvent({
+    extendedProperties: {
+      private: {
+        source: 'moodle-calendar-sync',
+      },
+    },
+  }), true);
+
+  assert.equal(isScriptOwnedMoodleEvent({
+    description: 'MOODLE_SYNC_UID: abc@online.uom.lk',
+  }), false);
 });
 
 test('normalizeMoodleApiEvent maps Moodle API course fields', () => {
