@@ -413,8 +413,11 @@ test('notification formatters summarize Moodle changes', () => {
   assert.equal(formatNotificationSubject(items), 'Moodle Calendar: 2 deadline changes');
   assert.match(formatNotificationBody(items), /New: \[MA3024 Numerical Methods\] Spot Quiz/);
   assert.match(formatNotificationBody(items), /Module: MA3024 - Numerical Methods/);
-  assert.match(formatNotificationHtml(items), /<strong>1<\/strong> new/);
-  assert.match(formatNotificationHtml(items), /Moodle Calendar/);
+  assert.match(formatNotificationHtml(items), /Moodle Calendar Sync/);
+  assert.match(formatNotificationHtml(items), /Moodle deadlines synced to Google Calendar/);
+  assert.match(formatNotificationHtml(items), /border-top:6px solid #2563eb/);
+  assert.match(formatNotificationHtml(items), /Google Calendar updated/);
+  assert.match(formatNotificationHtml(items), /border-radius:18px/);
 });
 
 test('formatNotificationHtml escapes event text', () => {
