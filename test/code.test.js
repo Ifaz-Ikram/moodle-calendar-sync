@@ -9,10 +9,12 @@ const {
   dedupeMoodleEvents,
   buildApiEventIndexes,
   enrichMoodleEventWithApiCourseMetadata,
+  escapeHtml,
   extractModuleCode,
   extractModuleCodeFromCourseFields,
   extractModuleName,
   formatNotificationBody,
+  formatNotificationHtml,
   formatNotificationSubject,
   formatEventTitle,
   formatSyncReport,
@@ -410,6 +412,24 @@ test('notification formatters summarize Moodle changes', () => {
   assert.equal(formatNotificationSubject(items), 'Moodle Calendar: 2 deadline changes');
   assert.match(formatNotificationBody(items), /New: \[MA3024 Numerical Methods\] Spot Quiz/);
   assert.match(formatNotificationBody(items), /Module: MA3024 - Numerical Methods/);
+  assert.match(formatNotificationHtml(items), /<strong>1<\/strong> new/);
+  assert.match(formatNotificationHtml(items), /Moodle Calendar/);
+});
+
+test('formatNotificationHtml escapes event text', () => {
+  const html = formatNotificationHtml([
+    {
+      action: 'New',
+      title: '<script>alert("x")</script>',
+      when: 'Tue, 7 Jul 2026, 3:00 PM',
+      moduleCode: 'MA3024',
+      moduleName: 'Numerical & Methods',
+    },
+  ]);
+
+  assert.match(html, /&lt;script&gt;alert\(&quot;x&quot;\)&lt;\/script&gt;/);
+  assert.match(html, /Numerical &amp; Methods/);
+  assert.equal(escapeHtml(`A&B < "C"`), 'A&amp;B &lt; &quot;C&quot;');
 });
 
 test('buildNotificationItem reads module metadata from calendar resource', () => {

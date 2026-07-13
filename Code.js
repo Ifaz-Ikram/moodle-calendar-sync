@@ -430,6 +430,7 @@ function sendSyncNotifications(email, items) {
     to: email,
     subject: formatNotificationSubject(items),
     body: formatNotificationBody(items),
+    htmlBody: formatNotificationHtml(items),
   });
   Logger.log('Notification email sent to %s for %s Moodle change(s).', email, items.length);
 }
@@ -464,6 +465,64 @@ function formatNotificationBody(items) {
 
   lines.push('This email was sent by moodle-calendar-sync.');
   return lines.join('\n');
+}
+
+function formatNotificationHtml(items) {
+  const visibleItems = items.slice(0, 20);
+  const created = items.filter(function(item) { return item.action === 'New'; }).length;
+  const updated = items.filter(function(item) { return item.action === 'Updated'; }).length;
+  const hiddenCount = items.length - visibleItems.length;
+  const rows = visibleItems.map(function(item) {
+    const isNew = item.action === 'New';
+    const badgeColor = isNew ? '#137333' : '#b06000';
+    const badgeBackground = isNew ? '#e6f4ea' : '#fef7e0';
+    const moduleText = [item.moduleCode, item.moduleName].filter(Boolean).join(' - ');
+    return [
+      '<tr>',
+      '<td style="padding:14px 0;border-bottom:1px solid #e8eaed;">',
+      '<div style="margin-bottom:8px;">',
+      '<span style="display:inline-block;border-radius:999px;background:', badgeBackground, ';color:', badgeColor, ';font-size:12px;font-weight:700;line-height:20px;padding:0 10px;text-transform:uppercase;">', escapeHtml(item.action), '</span>',
+      '</div>',
+      '<div style="font-size:16px;line-height:22px;font-weight:700;color:#202124;margin-bottom:8px;">', escapeHtml(item.title), '</div>',
+      item.when ? '<div style="font-size:14px;line-height:20px;color:#3c4043;"><strong>Due:</strong> ' + escapeHtml(item.when) + '</div>' : '',
+      moduleText ? '<div style="font-size:14px;line-height:20px;color:#3c4043;"><strong>Module:</strong> ' + escapeHtml(moduleText) + '</div>' : '',
+      '</td>',
+      '</tr>',
+    ].join('');
+  }).join('');
+
+  return [
+    '<div style="margin:0;padding:0;background:#f8fafd;font-family:Arial,Helvetica,sans-serif;color:#202124;">',
+    '<div style="max-width:720px;margin:0 auto;padding:28px 18px;">',
+    '<div style="background:#ffffff;border:1px solid #e8eaed;border-radius:12px;overflow:hidden;">',
+    '<div style="background:#0b57d0;color:#ffffff;padding:22px 24px;">',
+    '<div style="font-size:13px;font-weight:700;letter-spacing:.3px;text-transform:uppercase;opacity:.9;">Moodle Calendar</div>',
+    '<div style="font-size:24px;line-height:32px;font-weight:700;margin-top:4px;">', items.length, ' deadline change', items.length === 1 ? '' : 's', '</div>',
+    '</div>',
+    '<div style="padding:18px 24px;border-bottom:1px solid #e8eaed;background:#ffffff;">',
+    '<span style="display:inline-block;margin-right:8px;font-size:13px;color:#137333;background:#e6f4ea;border-radius:999px;padding:6px 10px;"><strong>', created, '</strong> new</span>',
+    '<span style="display:inline-block;font-size:13px;color:#b06000;background:#fef7e0;border-radius:999px;padding:6px 10px;"><strong>', updated, '</strong> updated</span>',
+    '</div>',
+    '<div style="padding:4px 24px 8px;">',
+    '<table role="presentation" cellpadding="0" cellspacing="0" style="width:100%;border-collapse:collapse;">',
+    rows,
+    '</table>',
+    hiddenCount > 0 ? '<div style="font-size:14px;color:#5f6368;padding:14px 0;">And ' + hiddenCount + ' more change(s).</div>' : '',
+    '</div>',
+    '<div style="background:#f8fafd;border-top:1px solid #e8eaed;padding:14px 24px;font-size:12px;line-height:18px;color:#5f6368;">This email was sent by moodle-calendar-sync.</div>',
+    '</div>',
+    '</div>',
+    '</div>',
+  ].join('');
+}
+
+function escapeHtml(value) {
+  return String(value || '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
 }
 
 function formatCalendarTimeForNotification(start, timezone) {
@@ -1754,7 +1813,9 @@ if (typeof module !== 'undefined' && module.exports) {
     formatSyncReport,
     formatCalendarValidationError,
     formatNotificationBody,
+    formatNotificationHtml,
     formatNotificationSubject,
+    escapeHtml,
     formatEventTitle,
     formatMoodleValidationError,
     buildNotificationItem,

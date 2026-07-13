@@ -420,7 +420,7 @@ When the feed has changed, each event is still compared with a stored content ha
 
 Synced events use popup reminders from `REMINDER_MINUTES`, or `[10080, 2880, 360]` by default.
 
-If `NOTIFY_EMAIL` is set, the script sends one email summary when a run creates new deadlines or updates existing ones. Dry runs, unchanged events, duplicate cleanup, and deleted old events do not send notifications.
+If `NOTIFY_EMAIL` is set, the script sends one styled HTML email summary when a run creates new deadlines or updates existing ones. Dry runs, unchanged events, duplicate cleanup, and deleted old events do not send notifications.
 
 At the end of each run, the execution log shows a sync report with source, calendar ID, created/updated/deleted counts, skipped/unchanged counts, missing-module count, and trigger status.
 
