@@ -69,6 +69,48 @@ Then in Apps Script:
 4. Run `dryRunSyncMoodleCalendar`.
 5. Run `forceSyncMoodleCalendar`.
 
+## UoM Quick Setup
+
+For `online.uom.lk`, use Moodle API mode first.
+
+Get a Moodle token locally:
+
+```bash
+curl -G 'https://online.uom.lk/login/token.php' \
+  --data-urlencode 'service=moodle_mobile_app' \
+  --data-urlencode 'username=YOUR_USERNAME' \
+  --data-urlencode 'password=YOUR_PASSWORD'
+```
+
+Do not paste the returned token into GitHub, chat, screenshots, or source code.
+
+In Apps Script **Project Settings -> Script Properties**, add:
+
+```text
+MOODLE_DATA_SOURCE  api
+MOODLE_API_BASE     https://online.uom.lk
+MOODLE_TOKEN        <your Moodle web service token>
+MOODLE_ICAL_URL     <your private Moodle calendar URL, optional but recommended>
+TIMEZONE            Asia/Colombo
+```
+
+Then run these Apps Script functions:
+
+```text
+setup
+dryRunSyncMoodleCalendar
+forceSyncMoodleCalendar
+setupHourlyTrigger
+```
+
+If a generic event like `Attendance` or an assignment title misses its module code, run:
+
+```text
+inspectAmbiguousMoodleEvents
+```
+
+Then add a `MODULE_OVERRIDES` entry only for the ambiguous event.
+
 ## Setup
 
 ### 1. Install dependencies
