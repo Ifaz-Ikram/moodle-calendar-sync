@@ -705,6 +705,10 @@ Use the GitHub issue templates for setup problems, wrong module names, duplicate
 
 Never include Moodle tokens, private iCal URLs, passwords, or screenshots containing secrets in a public issue.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## Changelog
 
 See [CHANGELOG.md](CHANGELOG.md).
