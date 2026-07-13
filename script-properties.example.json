@@ -1,0 +1,13 @@
+{
+  "MOODLE_DATA_SOURCE": "api",
+  "MOODLE_API_BASE": "https://online.uom.lk",
+  "MOODLE_TOKEN": "PASTE_YOUR_MOODLE_WEB_SERVICE_TOKEN_IN_APPS_SCRIPT_ONLY",
+  "MOODLE_ICAL_URL": "PASTE_YOUR_PRIVATE_MOODLE_ICAL_URL_IN_APPS_SCRIPT_ONLY",
+  "TIMEZONE": "Asia/Colombo",
+  "MOODLE_CALENDAR_NAME": "Moodle Deadlines",
+  "REMINDER_MINUTES": "[10080,2880,360]",
+  "NOTIFY_EMAIL": "you@example.com",
+  "MODULE_NAMES": "{\"CS3501\":\"Data Science and Engineering Project\",\"CS3621\":\"Data Mining\",\"CS3631\":\"Deep Neural Networks\",\"MA3024\":\"Numerical Methods\",\"MN3043\":\"Business Economics and Financial Accounting\"}",
+  "MODULE_OVERRIDES": "{\"byTitle\":{},\"byUid\":{}}",
+  "EVENT_COLOR_RULES": "{\"byKeyword\":{\"attendance\":\"7\",\"quiz\":\"5\",\"submission\":\"11\",\"exam\":\"4\"},\"byModule\":{},\"byEventType\":{}}"
+}

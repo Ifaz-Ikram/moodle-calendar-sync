@@ -1,14 +1,30 @@
 {
   "name": "moodle-calendar-sync",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Google Apps Script sync from Moodle calendar deadlines to Google Calendar.",
+  "private": true,
   "scripts": {
+    "check:secrets": "node scripts/check-secrets.js",
+    "ci": "npm run check:secrets && npm test",
     "test": "node --test"
   },
-  "keywords": [],
-  "author": "",
+  "keywords": [
+    "moodle",
+    "google-calendar",
+    "apps-script",
+    "calendar-sync",
+    "clasp"
+  ],
+  "author": "Ifaz Ikram",
   "license": "ISC",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Ifaz-Ikram/moodle-calendar-sync.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Ifaz-Ikram/moodle-calendar-sync/issues"
+  },
+  "homepage": "https://github.com/Ifaz-Ikram/moodle-calendar-sync#readme",
   "type": "commonjs",
   "dependencies": {
     "ical.js": "^2.2.1"

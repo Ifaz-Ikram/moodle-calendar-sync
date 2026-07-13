@@ -149,6 +149,14 @@ If `MOODLE_DATA_SOURCE` is unset, the script uses API mode when `MOODLE_TOKEN` e
 
 Keep `MOODLE_ICAL_URL` as a fallback if you want, but do not put any token in source code.
 
+For a copyable reference, see:
+
+```text
+script-properties.example.json
+```
+
+Do not fill that file with real secrets. Add real values directly in Apps Script Project Settings. If you create a local private copy for yourself, name it `script-properties.local.json` or `script-properties.private.json`; those names are ignored by Git.
+
 Optional:
 
 ```text
@@ -346,6 +354,14 @@ npx clasp push --force
 ```bash
 npm test
 ```
+
+Run the same checks used by GitHub Actions:
+
+```bash
+npm run ci
+```
+
+This runs a lightweight secret scan and the test suite.
 
 ### 10. Run first-time setup
 

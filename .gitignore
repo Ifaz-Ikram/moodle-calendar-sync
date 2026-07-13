@@ -5,6 +5,8 @@ node_modules/
 .clasp.local.json
 .env
 .env.*
+script-properties.local.json
+script-properties.private.json
 
 npm-debug.log*
 yarn-debug.log*
