@@ -111,6 +111,26 @@ inspectAmbiguousMoodleEvents
 
 Then add a `MODULE_OVERRIDES` entry only for the ambiguous event.
 
+### Getting the UoM Moodle iCal URL
+
+UoM students can get the private Moodle calendar URL from the calendar export page:
+
+```text
+https://online.uom.lk/calendar/export.php
+```
+
+Steps:
+
+1. Log in to `https://online.uom.lk`.
+2. Open `https://online.uom.lk/calendar/export.php`.
+3. Choose the events you want to export. For this sync, use all events if you want assignments, quizzes, attendance, and other Moodle deadlines.
+4. Choose the time period. Recent and next 60 days is usually enough, but all events is also fine if Moodle offers it.
+5. Click the button to get the calendar URL.
+6. Copy the generated URL. It usually points to `/calendar/export_execute.php` and includes private token parameters.
+7. Add that full URL as `MOODLE_ICAL_URL` in Apps Script **Project Settings -> Script Properties**.
+
+Treat this URL like a password. Anyone with the full link can read the exported Moodle calendar feed.
+
 ## Setup
 
 ### 1. Install dependencies
