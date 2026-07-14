@@ -5,9 +5,9 @@
   "MOODLE_ICAL_URL": "PASTE_YOUR_PRIVATE_MOODLE_ICAL_URL_IN_APPS_SCRIPT_ONLY",
   "TIMEZONE": "Asia/Colombo",
   "MOODLE_CALENDAR_NAME": "Moodle Deadlines",
-  "REMINDER_MINUTES": "[10080,2880,360]",
+  "REMINDER_MINUTES": "[10080,2880,1440,360,60]",
   "NOTIFY_EMAIL": "you@example.com",
-  "MODULE_NAMES": "{\"CS3501\":\"Data Science and Engineering Project\",\"CS3621\":\"Data Mining\",\"CS3631\":\"Deep Neural Networks\",\"MA3024\":\"Numerical Methods\",\"MN3043\":\"Business Economics and Financial Accounting\"}",
-  "MODULE_OVERRIDES": "{\"byTitle\":{},\"byUid\":{}}",
+  "MODULE_NAMES": "{\"CS3501\":\"Data Science and Engineering Project\",\"CS3621\":\"Data Mining\",\"CS3631\":\"Deep Neural Networks\",\"CS3880\":\"Engineer and Society\",\"CS3043\":\"Database Systems\",\"CS3063\":\"Theory of Computing\",\"EL3510\":\"Professional Communication for Engineering Contexts\",\"MA2024\":\"Calculus\",\"MA3024\":\"Numerical Methods\",\"MA3030\":\"Operational Research\",\"MN3043\":\"Business Economics and Financial Accounting\"}",
+  "MODULE_OVERRIDES": "{\"byTitle\":{\"Spot Quiz 02-7th July is due\":\"MA3024\",\"Spot Quiz 03-14th July is due\":\"MA3024\",\"Practice- Quiz 2 closes\":\"CS3043\",\"Answer Submission for Additional Questions is due\":\"MN3043\",\"Self Assessment 01 closes\":\"MN3043\",\"Self Assessment 02 closes\":\"MN3043\",\"Self Assessment - Preparation of Financial Statements opens\":\"MN3043\",\"Pattern Mining Assignment closes\":\"CS3621\"},\"byTitlePrefix\":{\"Submit here appeals about your Provisional Results\":\"CS3063\"},\"byUid\":{}}",
   "EVENT_COLOR_RULES": "{\"byKeyword\":{\"attendance\":\"7\",\"quiz\":\"5\",\"submission\":\"11\",\"exam\":\"4\"},\"byModule\":{},\"byEventType\":{}}"
 }

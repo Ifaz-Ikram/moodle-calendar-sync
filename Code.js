@@ -17,7 +17,7 @@ const DEFAULT_MOODLE_CALENDAR_NAME = 'Moodle Deadlines';
 const DEFAULT_MOODLE_API_BASE = 'https://online.uom.lk';
 const DATA_SOURCE_API = 'api';
 const DATA_SOURCE_ICAL = 'ical';
-const DEFAULT_REMINDER_MINUTES = [10080, 2880, 360];
+const DEFAULT_REMINDER_MINUTES = [10080, 2880, 1440, 360, 60];
 const DEFAULT_EVENT_COLOR_RULES = {
   byKeyword: {
     attendance: '7',
@@ -271,7 +271,7 @@ function validateJsonProperty(name, raw, expectedType) {
   }
 
   if (expectedType === 'array' && !Array.isArray(parsed)) {
-    throw new Error('Script Property ' + name + ' must be a JSON array. Example: [10080,2880,360]');
+    throw new Error('Script Property ' + name + ' must be a JSON array. Example: [10080,2880,1440,360,60]');
   }
 
   if (expectedType === 'object' && (Array.isArray(parsed) || parsed === null || typeof parsed !== 'object')) {
@@ -353,7 +353,7 @@ function syncMoodleCalendarInternal(options) {
     dryRun,
     removalOptions
   );
-  const missingModules = countMissingModuleEvents(moodleEvents, moduleOverrides, window.start, window.end);
+  const missingModules = countMissingModuleEvents(moodleEvents, moduleOverrides, window.start, window.end, timezone);
   let created = 0;
   let updated = 0;
   let skipped = 0;
@@ -455,12 +455,12 @@ function formatSyncReport(report) {
   ].join('\n');
 }
 
-function countMissingModuleEvents(events, moduleOverrides, now, horizon) {
+function countMissingModuleEvents(events, moduleOverrides, now, horizon, timezone) {
   return events.filter(function(event) {
     return event.uid &&
       event.start &&
       isInSyncWindow(event, now, horizon) &&
-      !extractModuleCode(event, moduleOverrides);
+      !extractModuleCode(event, moduleOverrides, timezone);
   }).length;
 }
 
@@ -707,26 +707,190 @@ function dryRunDeleteAllSyncedMoodleEvents() {
   Logger.log('Dry run delete all synced Moodle events from %s. Would delete: %s', calendarId, deleted);
 }
 
+function getModuleResolutionSource(event, moduleOverrides, timezone) {
+  if (extractModuleCodeFromCourseFields(event)) {
+    return 'course';
+  }
+
+  if (getModuleCodeFromKeyOverrides(event, moduleOverrides.byKey, timezone)) {
+    return 'byKey';
+  }
+
+  if (moduleOverrides.byUid && moduleOverrides.byUid[event.uid]) {
+    return 'byUid';
+  }
+
+  const titleOverride = moduleOverrides.byTitle && moduleOverrides.byTitle[normalizeKeyPart(event.summary || '')];
+  if (titleOverride) {
+    return 'byTitle';
+  }
+
+  if (getModuleCodeFromTitlePrefix(event.summary, moduleOverrides.byTitlePrefix)) {
+    return 'byTitlePrefix';
+  }
+
+  const text = [
+    event.summary || '',
+    event.description || '',
+    event.location || '',
+    event.url || '',
+    event.uid || '',
+  ].join('\n');
+  const match = text.match(/\b[A-Z]{2,4}\s?\d{4}\b/);
+
+  return match ? 'text' : 'missing';
+}
+
+function inspectModuleResolution() {
+  const props = PropertiesService.getScriptProperties();
+  const timezone = getScriptTimezone(props);
+  const moduleOverrides = getModuleOverrides(props);
+  const source = loadMoodleEvents(props);
+  const events = dedupeMoodleEvents(source.rawEvents || []);
+  const counts = {
+    course: 0,
+    byKey: 0,
+    byUid: 0,
+    byTitle: 0,
+    byTitlePrefix: 0,
+    text: 0,
+    missing: 0,
+  };
+
+  Logger.log('Inspecting module resolution for %s events from source: %s', events.length, source.source);
+  events.forEach(function(event) {
+    const sourceName = getModuleResolutionSource(event, moduleOverrides, timezone);
+    const moduleCode = extractModuleCode(event, moduleOverrides, timezone);
+    counts[sourceName] = (counts[sourceName] || 0) + 1;
+
+    if (sourceName !== 'course' && sourceName !== 'text') {
+      Logger.log(
+        'Manual override | source=%s | module=%s | title="%s" | uid="%s" | course="%s"',
+        sourceName,
+        moduleCode || '(missing)',
+        event.summary || '',
+        event.uid || '',
+        event.courseShortName || event.courseFullName || ''
+      );
+    }
+    if (sourceName === 'missing') {
+      Logger.log(
+        'Missing module | title="%s" | uid="%s" | start="%s" | course="%s"',
+        event.summary || '',
+        event.uid || '',
+        getParsedDateKey(event.start),
+        event.courseShortName || event.courseFullName || ''
+      );
+    }
+  });
+
+  Logger.log('Module resolution summary: %s', JSON.stringify(counts));
+  Logger.log(
+    'Automatic: %s | Manual overrides: %s | Missing: %s',
+    (counts.course || 0) + (counts.text || 0),
+    (counts.byKey || 0) + (counts.byUid || 0) + (counts.byTitle || 0) + (counts.byTitlePrefix || 0),
+    counts.missing || 0
+  );
+}
+
 function inspectAmbiguousMoodleEvents() {
   const props = PropertiesService.getScriptProperties();
+  const timezone = getScriptTimezone(props);
   const moduleOverrides = getModuleOverrides(props);
   const source = loadMoodleEvents(props);
   const events = dedupeMoodleEvents(source.rawEvents || []);
 
   Logger.log('Inspecting %s Moodle events from source: %s', events.length, source.source);
   events.forEach(function(event) {
-    const moduleCode = extractModuleCode(event, moduleOverrides);
+    const moduleCode = extractModuleCode(event, moduleOverrides, timezone);
     if (!moduleCode) {
       Logger.log(
-        'Ambiguous Moodle event | title="%s" | uid="%s" | start="%s" | course="%s" | description="%s"',
+        'Ambiguous Moodle event | title="%s" | uid="%s" | start="%s" | keys="%s" | course="%s" | description="%s"',
         event.summary || '',
         event.uid || '',
         getParsedDateKey(event.start),
+        getMoodleEventKeyVariants(event, timezone).join(', '),
         event.courseFullName || event.courseShortName || '',
         shortenForLog(event.description || '')
       );
     }
   });
+}
+
+function inspectAttendanceEvents() {
+  const props = PropertiesService.getScriptProperties();
+  const timezone = getScriptTimezone(props);
+  const moduleOverrides = getModuleOverrides(props);
+  const source = loadMoodleEvents(props);
+  const events = dedupeMoodleEvents(source.rawEvents || [])
+    .filter(function(event) {
+      return normalizeTitleForKey(event.summary || '') === 'attendance';
+    })
+    .sort(function(a, b) {
+      return getParsedDateKey(a.start).localeCompare(getParsedDateKey(b.start));
+    });
+
+  Logger.log('Found %s attendance events from source: %s', events.length, source.source);
+  const byKeySuggestions = {};
+  const byUidSuggestions = {};
+
+  events.forEach(function(event) {
+    const moduleCode = extractModuleCode(event, moduleOverrides, timezone);
+    const dateKey = getAttendanceDateKey(event, timezone);
+    const fromCourse = extractModuleCodeFromCourseFields(event);
+    const fromUid = moduleOverrides.byUid && moduleOverrides.byUid[event.uid];
+    const fromKey = getModuleCodeFromKeyOverrides(event, moduleOverrides.byKey, timezone);
+    const sourceLabel = fromKey
+      ? 'byKey'
+      : (fromCourse ? 'course' : (fromUid ? 'byUid' : 'missing'));
+
+    Logger.log(
+      'Attendance | date=%s | uid="%s" | module=%s | source=%s | course="%s" | byKey="attendance|%s"',
+      dateKey,
+      event.uid || '',
+      moduleCode || '(missing)',
+      sourceLabel,
+      event.courseFullName || event.courseShortName || '',
+      dateKey
+    );
+
+    if (sourceLabel === 'byUid' && !fromCourse) {
+      byUidSuggestions[event.uid] = 'MODULE_CODE';
+    }
+    if (!moduleCode) {
+      byKeySuggestions['attendance|' + dateKey] = 'MODULE_CODE';
+    }
+  });
+
+  if (Object.keys(byKeySuggestions).length) {
+    Logger.log('Suggested byKey entries:\n%s', JSON.stringify(byKeySuggestions, null, 2));
+  }
+  if (Object.keys(byUidSuggestions).length) {
+    Logger.log('Attendance events currently using byUid only (review these):\n%s', JSON.stringify(byUidSuggestions, null, 2));
+  }
+}
+
+function getAttendanceDateKey(event, timezone) {
+  if (timezone) {
+    const start = event.start && event.start.dateOnly
+      ? { date: event.start.date }
+      : { dateTime: event.start && event.start.dateTime };
+    const tzDate = getMatchingDateKey(start, timezone);
+    if (tzDate) {
+      return tzDate.slice(0, 10);
+    }
+  }
+
+  const variants = getMoodleEventKeyVariants(event, timezone);
+  for (let i = 0; i < variants.length; i++) {
+    const parts = variants[i].split('|');
+    if (parts.length === 2 && /^\d{4}-\d{2}-\d{2}$/.test(parts[1])) {
+      return parts[1];
+    }
+  }
+
+  const rawDate = getParsedDateKey(event.start);
+  return rawDate ? rawDate.slice(0, 10) : '';
 }
 
 function inspectLearnedModuleNames() {
@@ -799,6 +963,11 @@ function getMoodleUrlId(url) {
   return match ? match[1] : '';
 }
 
+function getIcalCalendarEventId(uid) {
+  const match = String(uid || '').match(/^(\d+)@/);
+  return match ? match[1] : '';
+}
+
 function getNeutralMoodleMatchKey(event, timezone) {
   const start = event.start.dateOnly
     ? { date: event.start.date }
@@ -813,6 +982,7 @@ function getNeutralMoodleMatchKey(event, timezone) {
 function buildApiEventIndexes(apiEvents, timezone) {
   const byNeutralKey = {};
   const byUrlId = {};
+  const byCalendarId = {};
 
   (apiEvents || []).forEach(function(event) {
     if (!event || !event.start) {
@@ -824,21 +994,26 @@ function buildApiEventIndexes(apiEvents, timezone) {
     if (urlId) {
       byUrlId[urlId] = event;
     }
+    const calendarId = event.calendarEventId || getIcalCalendarEventId(event.uid);
+    if (calendarId) {
+      byCalendarId[calendarId] = event;
+    }
   });
 
   return {
     byNeutralKey: byNeutralKey,
     byUrlId: byUrlId,
+    byCalendarId: byCalendarId,
   };
 }
 
 function mergeEventCourseFields(target, source) {
-  if (!source || !source.courseFullName) {
+  if (!source || (!source.courseFullName && !source.courseShortName)) {
     return target;
   }
 
   return Object.assign({}, target, {
-    courseFullName: source.courseFullName,
+    courseFullName: source.courseFullName || target.courseFullName || '',
     courseShortName: source.courseShortName || target.courseShortName || '',
     courseId: source.courseId || target.courseId || '',
     url: target.url || source.url || '',
@@ -846,11 +1021,16 @@ function mergeEventCourseFields(target, source) {
 }
 
 function enrichMoodleEventWithApiCourseMetadata(event, apiIndexes, timezone) {
-  if (!event || event.courseFullName) {
+  if (!event || extractModuleCodeFromCourseFields(event)) {
     return event;
   }
 
-  apiIndexes = apiIndexes || { byNeutralKey: {}, byUrlId: {} };
+  apiIndexes = apiIndexes || { byNeutralKey: {}, byUrlId: {}, byCalendarId: {} };
+  const calendarId = getIcalCalendarEventId(event.uid);
+  if (calendarId && apiIndexes.byCalendarId && apiIndexes.byCalendarId[calendarId]) {
+    return mergeEventCourseFields(event, apiIndexes.byCalendarId[calendarId]);
+  }
+
   let apiEvent = apiIndexes.byNeutralKey[getNeutralMoodleMatchKey(event, timezone)];
   if (!apiEvent) {
     const urlId = getMoodleUrlId(event.url);
@@ -982,16 +1162,132 @@ function loadMoodleApiEvents(props) {
   }
 
   const window = getSyncWindowBounds();
+  const courseMap = loadUserCoursesMap(props, apiBase, token);
   const apiEvents = paginateMoodleApiEventPages(function(params) {
     const payload = callMoodleApi(apiBase, token, 'core_calendar_get_action_events_by_timesort', params);
     return payload.events || [];
   }, window.start, window.end);
+  const calendarEvents = loadMoodleCalendarApiEvents(props, apiBase, token, courseMap);
+  const normalizedActionEvents = apiEvents.map(function(event) {
+    return normalizeMoodleApiEvent(event, apiBase);
+  });
+  const actionCalendarIds = {};
+  normalizedActionEvents.forEach(function(event) {
+    const calendarId = getIcalCalendarEventId(event.uid);
+    if (calendarId) {
+      actionCalendarIds[calendarId] = true;
+    }
+  });
+  const supplementalCalendarEvents = calendarEvents.filter(function(event) {
+    return !actionCalendarIds[event.calendarEventId];
+  });
+
   return {
     source: DATA_SOURCE_API,
-    hashInput: JSON.stringify(apiEvents),
-    rawEvents: apiEvents.map(function(event) {
-      return normalizeMoodleApiEvent(event, apiBase);
+    hashInput: JSON.stringify({
+      actionEvents: apiEvents,
+      calendarEvents: calendarEvents.map(function(event) {
+        return {
+          id: event.calendarEventId,
+          summary: event.summary,
+          courseShortName: event.courseShortName,
+          start: getParsedDateKey(event.start),
+        };
+      }),
     }),
+    rawEvents: normalizedActionEvents.concat(supplementalCalendarEvents),
+  };
+}
+
+function loadUserCoursesMap(props, apiBase, token) {
+  apiBase = apiBase || getMoodleApiBase(props);
+  token = token || props.getProperty(PROP_MOODLE_TOKEN);
+  if (!token) {
+    return {};
+  }
+
+  try {
+    const courses = callMoodleApi(apiBase, token, 'core_enrol_get_users_courses', {
+      userid: 0,
+    });
+    const map = {};
+    (courses || []).forEach(function(course) {
+      map[String(course.id)] = {
+        shortname: stripHtml(course.shortname || ''),
+        fullname: stripHtml(course.fullname || ''),
+      };
+    });
+    return map;
+  } catch (error) {
+    Logger.log(
+      'Could not load enrolled courses for automatic module detection: %s',
+      error && error.message ? error.message : String(error)
+    );
+    return {};
+  }
+}
+
+function loadMoodleCalendarApiEvents(props, apiBase, token, courseMap) {
+  apiBase = apiBase || getMoodleApiBase(props);
+  token = token || props.getProperty(PROP_MOODLE_TOKEN);
+  courseMap = courseMap || {};
+  if (!token) {
+    return [];
+  }
+
+  const window = getSyncWindowBounds();
+  try {
+    const courseIds = Object.keys(courseMap).map(function(id) {
+      return Number(id);
+    }).filter(function(id) {
+      return Number.isFinite(id);
+    });
+    const payload = callMoodleApi(apiBase, token, 'core_calendar_get_calendar_events', {
+      events: {
+        courseids: courseIds,
+      },
+      options: {
+        timestart: dateToUnixSeconds(window.start),
+        timeend: dateToUnixSeconds(window.end),
+        userevents: 1,
+        siteevents: 1,
+        ignorehidden: 1,
+      },
+    });
+    return (payload.events || []).map(function(event) {
+      return normalizeMoodleCalendarEvent(event, apiBase, courseMap);
+    });
+  } catch (error) {
+    Logger.log(
+      'Calendar API enrichment unavailable; iCal course metadata is still used: %s',
+      error && error.message ? error.message : String(error)
+    );
+    return [];
+  }
+}
+
+function normalizeMoodleCalendarEvent(calendarEvent, apiBase, courseMap) {
+  const courseId = String(calendarEvent.courseid || '');
+  const course = courseMap[courseId] || {};
+  const host = apiBase.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const start = calendarEvent.timestart;
+  const duration = calendarEvent.timeduration || 0;
+  const end = duration > 0 ? start + duration : start;
+
+  return {
+    uid: calendarEvent.id + '@' + host,
+    calendarEventId: String(calendarEvent.id),
+    summary: stripHtml(calendarEvent.name || 'Moodle event'),
+    description: stripHtml(calendarEvent.description || ''),
+    location: stripHtml(calendarEvent.location || ''),
+    url: stripHtml(calendarEvent.url || ''),
+    start: unixTimestampToParsedDate(start),
+    end: unixTimestampToParsedDate(end),
+    courseFullName: course.fullname || '',
+    courseShortName: course.shortname || '',
+    courseId: courseId,
+    moduleName: calendarEvent.modulename || '',
+    eventType: calendarEvent.eventtype || '',
   };
 }
 
@@ -1078,11 +1374,33 @@ function createSyncHash(sourceText, moduleOverrides, moduleNames, reminderMinute
 }
 
 function toQueryString(params) {
-  return Object.keys(params)
-    .map(function(key) {
-      return encodeURIComponent(key) + '=' + encodeURIComponent(params[key]);
-    })
-    .join('&');
+  const parts = [];
+  Object.keys(params).forEach(function(key) {
+    appendQueryParam(parts, key, params[key]);
+  });
+  return parts.join('&');
+}
+
+function appendQueryParam(parts, prefix, value) {
+  if (value === null || value === undefined) {
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    value.forEach(function(item, index) {
+      appendQueryParam(parts, prefix + '[' + index + ']', item);
+    });
+    return;
+  }
+
+  if (typeof value === 'object') {
+    Object.keys(value).forEach(function(key) {
+      appendQueryParam(parts, prefix + '[' + key + ']', value[key]);
+    });
+    return;
+  }
+
+  parts.push(encodeURIComponent(prefix) + '=' + encodeURIComponent(String(value)));
 }
 
 function stripHtml(value) {
@@ -1146,14 +1464,64 @@ function dedupeMoodleEvents(events) {
 }
 
 function getMoodleEventKey(event) {
-  return [
+  return normalizeMoodleEventKey([
     normalizeTitleForKey(event.summary || 'Moodle event'),
     getParsedDateKey(event.start),
-  ].join('|');
+  ].join('|'));
+}
+
+function normalizeMoodleEventKey(key) {
+  return normalizeKeyPart(key);
+}
+
+function getMoodleEventKeyVariants(event, timezone) {
+  const titleKey = normalizeTitleForKey(event.summary || 'Moodle event');
+  const rawDate = getParsedDateKey(event.start);
+  const start = event.start && event.start.dateOnly
+    ? { date: event.start.date }
+    : { dateTime: event.start && event.start.dateTime };
+  const tzDate = timezone ? getMatchingDateKey(start, timezone) : '';
+  const keys = [];
+  const seen = {};
+
+  function addKey(value) {
+    const normalized = normalizeMoodleEventKey(value);
+    if (!normalized || seen[normalized]) {
+      return;
+    }
+    seen[normalized] = true;
+    keys.push(normalized);
+  }
+
+  if (rawDate) {
+    addKey(titleKey + '|' + rawDate);
+    addKey(titleKey + '|' + rawDate.slice(0, 10));
+  }
+  if (tzDate) {
+    addKey(titleKey + '|' + tzDate);
+    addKey(titleKey + '|' + tzDate.slice(0, 10));
+  }
+
+  return keys;
+}
+
+function getModuleCodeFromKeyOverrides(event, byKey, timezone) {
+  if (!byKey) {
+    return '';
+  }
+
+  const variants = getMoodleEventKeyVariants(event, timezone);
+  for (let i = 0; i < variants.length; i++) {
+    if (byKey[variants[i]]) {
+      return byKey[variants[i]];
+    }
+  }
+
+  return '';
 }
 
 function getMoodleMatchKey(event, timezone, moduleOverrides, moduleNames) {
-  const moduleCode = extractModuleCode(event, moduleOverrides);
+  const moduleCode = extractModuleCode(event, moduleOverrides, timezone);
   const moduleName = moduleCode ? moduleNames[moduleCode] || extractModuleName(event, moduleCode) : '';
   const start = event.start.dateOnly
     ? { date: event.start.date }
@@ -1274,6 +1642,14 @@ function applyIcsLine(event, line) {
   if (name === 'DESCRIPTION') event.description = decodeIcsText(value);
   if (name === 'LOCATION') event.location = decodeIcsText(value);
   if (name === 'URL') event.url = decodeIcsText(value);
+  if (name === 'CATEGORIES') {
+    const categories = decodeIcsText(value).split(',').map(function(item) {
+      return item.trim();
+    }).filter(Boolean);
+    if (categories.length && !event.courseShortName) {
+      event.courseShortName = categories[0];
+    }
+  }
   if (name === 'DTSTART') event.start = parseIcsDate(rawName, value);
   if (name === 'DTEND') event.end = parseIcsDate(rawName, value);
 }
@@ -1312,7 +1688,7 @@ function shortenForLog(value) {
 }
 
 function buildCalendarResource(event, timezone, moduleOverrides, moduleNames, reminderMinutes, colorRules) {
-  const moduleCode = extractModuleCode(event, moduleOverrides);
+  const moduleCode = extractModuleCode(event, moduleOverrides, timezone);
   const moduleName = moduleCode ? moduleNames[moduleCode] || extractModuleName(event, moduleCode) : '';
   const title = formatEventTitle(event, moduleCode, moduleName);
   const colorId = getEventColorId(event, moduleCode, colorRules);
@@ -1408,20 +1784,30 @@ function extractModuleCodeFromCourseFields(event) {
   return match ? match[0].replace(/\s+/g, '') : '';
 }
 
-function extractModuleCode(event, moduleOverrides) {
-  const uidOverride = moduleOverrides.byUid[event.uid];
-  if (uidOverride) {
-    return uidOverride;
-  }
-
+function extractModuleCode(event, moduleOverrides, timezone) {
   const fromCourse = extractModuleCodeFromCourseFields(event);
   if (fromCourse) {
     return fromCourse;
   }
 
-  const titleOverride = moduleOverrides.byTitle[normalizeKeyPart(event.summary || '')];
+  const keyOverride = getModuleCodeFromKeyOverrides(event, moduleOverrides.byKey, timezone);
+  if (keyOverride) {
+    return keyOverride;
+  }
+
+  const uidOverride = moduleOverrides.byUid && moduleOverrides.byUid[event.uid];
+  if (uidOverride) {
+    return uidOverride;
+  }
+
+  const titleOverride = moduleOverrides.byTitle && moduleOverrides.byTitle[normalizeKeyPart(event.summary || '')];
   if (titleOverride) {
     return titleOverride;
+  }
+
+  const titlePrefixOverride = getModuleCodeFromTitlePrefix(event.summary, moduleOverrides.byTitlePrefix);
+  if (titlePrefixOverride) {
+    return titlePrefixOverride;
   }
 
   const text = [
@@ -1484,20 +1870,115 @@ function shouldShowCourseLine(moduleCode, moduleName, event) {
 function getModuleOverrides(props) {
   const raw = props.getProperty(PROP_MODULE_OVERRIDES);
   if (!raw) {
-    return { byUid: {}, byTitle: {} };
+    return { byUid: {}, byTitle: {}, byTitlePrefix: {}, byKey: {} };
   }
 
   const parsed = JSON.parse(raw);
   const byUid = parsed.byUid || {};
   const byTitle = {};
+  const byTitlePrefix = {};
+  const byKey = {};
   Object.keys(parsed.byTitle || {}).forEach(function(title) {
     byTitle[normalizeKeyPart(title)] = parsed.byTitle[title];
+  });
+  Object.keys(parsed.byTitlePrefix || {}).forEach(function(prefix) {
+    byTitlePrefix[normalizeKeyPart(prefix)] = parsed.byTitlePrefix[prefix];
+  });
+  Object.keys(parsed.byKey || {}).forEach(function(key) {
+    byKey[normalizeKeyPart(key)] = parsed.byKey[key];
+  });
+  const weeklyByKey = expandWeeklyOverridesToByKey(parsed.byWeekly);
+  Object.keys(weeklyByKey).forEach(function(key) {
+    if (!byKey[key]) {
+      byKey[key] = weeklyByKey[key];
+    }
   });
 
   return {
     byUid: byUid,
     byTitle: byTitle,
+    byTitlePrefix: byTitlePrefix,
+    byKey: byKey,
   };
+}
+
+function expandWeeklyOverridesToByKey(byWeekly) {
+  const byKey = {};
+
+  Object.keys(byWeekly || {}).forEach(function(titleKey) {
+    const rule = byWeekly[titleKey] || {};
+    const module = rule.module;
+    const fromDate = rule.from;
+    const toDate = rule.to;
+    const weekday = parseWeekdayNumber(rule.weekday || 'friday');
+    if (!module || !fromDate || !toDate || weekday === undefined) {
+      return;
+    }
+
+    const normalizedTitle = normalizeTitleForKey(titleKey);
+    listWeekdayDates(fromDate, toDate, weekday).forEach(function(date) {
+      byKey[normalizeMoodleEventKey(normalizedTitle + '|' + date)] = module;
+    });
+  });
+
+  return byKey;
+}
+
+function parseWeekdayNumber(value) {
+  const weekdays = {
+    sunday: 0,
+    monday: 1,
+    tuesday: 2,
+    wednesday: 3,
+    thursday: 4,
+    friday: 5,
+    saturday: 6,
+  };
+
+  return weekdays[normalizeKeyPart(value)];
+}
+
+function listWeekdayDates(fromDate, toDate, weekday) {
+  const dates = [];
+  const current = parseDateOnly(fromDate);
+  const end = parseDateOnly(toDate);
+
+  while (current <= end) {
+    if (current.getUTCDay() === weekday) {
+      dates.push(formatDateOnly(current));
+    }
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+
+  return dates;
+}
+
+function parseDateOnly(value) {
+  const parts = String(value).slice(0, 10).split('-');
+  return new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])));
+}
+
+function formatDateOnly(date) {
+  return date.toISOString().slice(0, 10);
+}
+
+function getModuleCodeFromTitlePrefix(summary, byTitlePrefix) {
+  const normalizedSummary = normalizeKeyPart(summary || '');
+  if (!normalizedSummary) {
+    return '';
+  }
+
+  const prefixes = Object.keys(byTitlePrefix || {}).sort(function(a, b) {
+    return b.length - a.length;
+  });
+  for (let i = 0; i < prefixes.length; i++) {
+    const prefix = prefixes[i];
+    if (normalizedSummary.indexOf(prefix) === 0) {
+      return byTitlePrefix[prefix];
+    }
+  }
+
+  return '';
 }
 
 function getModuleNames(props) {
@@ -1916,7 +2397,8 @@ if (typeof module !== 'undefined' && module.exports) {
     dedupeMoodleEvents,
     buildApiEventIndexes,
     enrichMoodleEventWithApiCourseMetadata,
-    extractModuleCode,
+    expandWeeklyOverridesToByKey,
+  extractModuleCode,
     extractModuleCodeFromCourseFields,
     extractModuleName,
     countMissingModuleEvents,
@@ -1935,6 +2417,8 @@ if (typeof module !== 'undefined' && module.exports) {
     buildApiEventIndexes,
     buildMoodleApiTimesortParams,
     dateToUnixSeconds,
+    getAttendanceDateKey,
+    getIcalCalendarEventId,
     getMatchingDateKey,
     getMatchingEventKey,
     getEventColorId,
@@ -1958,6 +2442,7 @@ if (typeof module !== 'undefined' && module.exports) {
     parseIcsDate,
     parseIcsEvents,
     stripHtml,
+    toQueryString,
     unfoldIcsLines,
     unixTimestampToParsedDate,
     validateJsonProperty,

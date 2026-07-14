@@ -184,7 +184,7 @@ These values belong in Apps Script **Script Properties** only.
 | `MOODLE_CALENDAR_NAME` | No | `Moodle Deadlines` | Calendar name used by `setupMoodleCalendar`. |
 | `MODULE_NAMES` | No | `{"CS3501":"Data Science and Engineering Project"}` | Manual module-name map. |
 | `MODULE_OVERRIDES` | No | `{"byTitle":{},"byUid":{}}` | Manual mappings for ambiguous Moodle events. |
-| `REMINDER_MINUTES` | No | `[10080,2880,360]` | Popup reminders before deadlines. |
+| `REMINDER_MINUTES` | No | `[10080,2880,1440,360,60]` | Popup reminders before deadlines. |
 | `NOTIFY_EMAIL` | No | `you@example.com` | Sends one email summary when new or changed Moodle deadlines are synced. |
 | `EVENT_COLOR_RULES` | No | `{"byKeyword":{"quiz":"5"}}` | Google Calendar event colors by keyword, module, or Moodle event type. |
 
@@ -205,13 +205,15 @@ By default, synced events use these popup reminders:
 ```text
 10080 = 7 days
 2880  = 2 days
+1440  = 1 day
 360   = 6 hours
+60    = 1 hour
 ```
 
 To change them, add this Script Property:
 
 ```text
-REMINDER_MINUTES  [10080,2880,360]
+REMINDER_MINUTES  [10080,2880,1440,360,60]
 ```
 
 ### Notification emails
@@ -283,6 +285,14 @@ If an event still misses its module code, run:
 inspectAmbiguousMoodleEvents
 ```
 
+For generic `Attendance` events that all look the same, run:
+
+```text
+inspectAttendanceEvents
+```
+
+That logs every attendance row with its date, Moodle UID, current module, and the `byKey` entry to add.
+
 Then add a `MODULE_OVERRIDES` Script Property only for the ambiguous event.
 
 Example:
@@ -293,20 +303,39 @@ Example:
     "Spot Quiz 02-7th July is due": "MA3024",
     "Practice- Quiz 2 closes": "CS3043"
   },
+  "byTitlePrefix": {
+    "Submit here appeals about your Provisional Results": "CS3063"
+  },
+  "byWeekly": {
+    "attendance": {
+      "module": "EL3510",
+      "from": "2026-07-17",
+      "to": "2026-10-02",
+      "weekday": "friday"
+    }
+  },
   "byUid": {
     "6822664@online.uom.lk": "CS3501"
   }
 }
 ```
 
-Use `byTitle` only when every event with that title belongs to the same module. Prefer `byUid` for one specific Moodle event.
+API mode automatically resolves module codes from:
+
+1. Moodle API `course.shortname` / `course.fullname` on assignments and quizzes
+2. iCal `CATEGORIES` (course shortname) on exported calendar events
+3. `core_calendar_get_calendar_events` matched by the numeric id in each iCal `UID`
+
+`MODULE_OVERRIDES` is only needed when Moodle does not expose course metadata for a specific event.
 
 Priority order:
 
-1. `byUid` for one specific Moodle event
-2. Moodle API `course.shortname` / `course.fullname`
-3. `byTitle` for iCal-only ambiguous events
-4. Automatic text detection
+1. Moodle API / iCal course metadata
+2. `byKey` for one specific title + start time or date
+3. `byUid` for one specific Moodle event
+4. `byTitle` for iCal-only ambiguous events
+5. `byTitlePrefix` for long titles
+6. Automatic text detection
 
 ## Advanced Setup
 

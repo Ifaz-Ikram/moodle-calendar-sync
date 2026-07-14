@@ -10,6 +10,7 @@ const {
   buildApiEventIndexes,
   enrichMoodleEventWithApiCourseMetadata,
   escapeHtml,
+  expandWeeklyOverridesToByKey,
   extractModuleCode,
   extractModuleCodeFromCourseFields,
   extractModuleName,
@@ -23,9 +24,11 @@ const {
   formatMoodleValidationError,
   getEventColorId,
   getEventColorRules,
+  getAttendanceDateKey,
   getMatchingDateKey,
   getMatchingEventKey,
   getMoodleDataSource,
+  getIcalCalendarEventId,
   getMoodleUrlId,
   getSampleNotificationItems,
   getSyncWindowBounds,
@@ -39,6 +42,7 @@ const {
   shouldShowCourseLine,
   parseIcsEvents,
   stripHtml,
+  toQueryString,
   unfoldIcsLines,
   validateJsonProperty,
 } = require('../Code.js');
@@ -160,6 +164,161 @@ test('extractModuleCode prefers byUid and byTitle overrides', () => {
     extractModuleCode({ uid: 'other@online.uom.lk', summary: 'Answer Submission for Additional Questions is due' }, overrides),
     'MN3043'
   );
+});
+
+test('extractModuleCode prefers Moodle course metadata over byUid overrides', () => {
+  const overrides = {
+    byUid: {
+      '6822664@online.uom.lk': 'CS3501',
+    },
+    byTitle: {},
+  };
+  const event = {
+    uid: '6822664@online.uom.lk',
+    summary: 'Attendance',
+    courseFullName: 'In23-S5-EL3510 - Professional Communication for Engineering Contexts',
+    courseShortName: 'In23-S5-EL3510',
+  };
+
+  assert.equal(extractModuleCode(event, overrides), 'EL3510');
+});
+
+test('extractModuleCode prefers byKey over byUid for generic attendance titles', () => {
+  const overrides = {
+    byUid: {
+      '6822677@online.uom.lk': 'CS3501',
+    },
+    byKey: {
+      'attendance|2026-07-16t18:30:00z': 'EL3510',
+    },
+  };
+  const event = {
+    uid: '6822677@online.uom.lk',
+    summary: 'Attendance',
+    start: { dateTime: '2026-07-16T18:30:00Z', dateOnly: false },
+  };
+
+  assert.equal(extractModuleCode(event, overrides), 'EL3510');
+});
+
+test('extractModuleCode matches byKey using timezone and date-only variants', () => {
+  const overrides = {
+    byKey: {
+      'attendance|2026-07-17': 'EL3510',
+    },
+  };
+  const event = {
+    uid: '6822677@online.uom.lk',
+    summary: 'Attendance',
+    start: { dateTime: '2026-07-16T18:30:00Z', dateOnly: false },
+  };
+
+  assert.equal(extractModuleCode(event, overrides, 'Asia/Colombo'), 'EL3510');
+});
+
+test('parseIcsEvents reads Moodle course shortname from CATEGORIES', () => {
+  const ics = [
+    'BEGIN:VCALENDAR',
+    'BEGIN:VEVENT',
+    'UID:6822664@online.uom.lk',
+    'SUMMARY:Attendance',
+    'CATEGORIES:In23-S5-EL3510',
+    'DTSTART:20260716T183000Z',
+    'DTEND:20260716T183000Z',
+    'END:VEVENT',
+    'END:VCALENDAR',
+  ].join('\n');
+
+  const event = parseIcsEvents(ics)[0];
+  assert.equal(event.courseShortName, 'In23-S5-EL3510');
+  assert.equal(extractModuleCode(event, { byUid: { '6822664@online.uom.lk': 'CS3501' } }), 'EL3510');
+});
+
+test('enrichMoodleEventWithApiCourseMetadata matches iCal attendance by calendar event id', () => {
+  const timezone = 'Asia/Colombo';
+  const apiIndexes = buildApiEventIndexes([{
+    uid: '6822664@online.uom.lk',
+    calendarEventId: '6822664',
+    summary: 'Attendance',
+    start: { dateTime: '2026-07-16T18:30:00Z', dateOnly: false },
+    courseShortName: 'In23-S5-EL3510',
+    courseFullName: 'In23-S5-EL3510 - Professional Communication for Engineering Contexts',
+  }], timezone);
+
+  const enriched = enrichMoodleEventWithApiCourseMetadata({
+    uid: '6822664@online.uom.lk',
+    summary: 'Attendance',
+    start: { dateTime: '2026-07-16T18:30:00Z', dateOnly: false },
+  }, apiIndexes, timezone);
+
+  assert.equal(extractModuleCode(enriched, { byUid: { '6822664@online.uom.lk': 'CS3501' } }), 'EL3510');
+});
+
+test('getIcalCalendarEventId extracts numeric Moodle calendar ids', () => {
+  assert.equal(getIcalCalendarEventId('6822664@online.uom.lk'), '6822664');
+  assert.equal(getIcalCalendarEventId('api:551637@online.uom.lk'), '');
+});
+
+test('expandWeeklyOverridesToByKey maps recurring Friday attendance through a date range', () => {
+  const byKey = expandWeeklyOverridesToByKey({
+    attendance: {
+      module: 'EL3510',
+      from: '2026-07-17',
+      to: '2026-10-02',
+      weekday: 'friday',
+    },
+  });
+
+  assert.equal(byKey['attendance|2026-07-17'], 'EL3510');
+  assert.equal(byKey['attendance|2026-08-28'], 'EL3510');
+  assert.equal(byKey['attendance|2026-10-02'], 'EL3510');
+  assert.equal(Object.keys(byKey).length, 12);
+});
+
+test('extractModuleCode matches byWeekly attendance through October 2', () => {
+  const overrides = {
+    byUid: {
+      '6822677@online.uom.lk': 'CS3501',
+    },
+    byKey: expandWeeklyOverridesToByKey({
+      attendance: {
+        module: 'EL3510',
+        from: '2026-07-17',
+        to: '2026-10-02',
+        weekday: 'friday',
+      },
+    }),
+  };
+  const event = {
+    uid: '6822677@online.uom.lk',
+    summary: 'Attendance',
+    start: { dateTime: '2026-10-01T18:30:00Z', dateOnly: false },
+  };
+
+  assert.equal(extractModuleCode(event, overrides, 'Asia/Colombo'), 'EL3510');
+});
+
+test('getAttendanceDateKey uses timezone-local calendar date', () => {
+  const event = {
+    summary: 'Attendance',
+    start: { dateTime: '2026-07-23T18:30:00Z', dateOnly: false },
+  };
+
+  assert.equal(getAttendanceDateKey(event, 'Asia/Colombo'), '2026-07-24');
+});
+
+test('extractModuleCode matches byTitlePrefix for long appeal titles', () => {
+  const overrides = {
+    byTitlePrefix: {
+      'submit here appeals about your provisional results': 'CS3063',
+    },
+  };
+  const event = {
+    uid: 'api:999@online.uom.lk',
+    summary: 'Submit here appeals about your Provisional Results: Deadline: 6pm on 16/07/2026 is due',
+  };
+
+  assert.equal(extractModuleCode(event, overrides), 'CS3063');
 });
 
 test('extractModuleCode prefers Moodle course metadata over byTitle overrides', () => {
@@ -329,6 +488,23 @@ test('stripHtml removes tags and decodes common entities', () => {
   assert.equal(stripHtml('<p>A&amp;B &lt; C</p>'), 'A&B < C');
 });
 
+test('toQueryString encodes nested Moodle REST parameters', () => {
+  const query = toQueryString({
+    wsfunction: 'core_calendar_get_calendar_events',
+    events: {
+      courseids: [101, 202],
+    },
+    options: {
+      timestart: 1700000000,
+      timeend: 1800000000,
+      userevents: 1,
+    },
+  });
+
+  assert.match(query, /events%5Bcourseids%5D%5B0%5D=101/);
+  assert.match(query, /options%5Btimestart%5D=1700000000/);
+});
+
 test('getMoodleDataSource defaults to API when token exists', () => {
   assert.equal(getMoodleDataSource(mockProps({ MOODLE_TOKEN: 'token' })), 'api');
   assert.equal(getMoodleDataSource(mockProps({})), 'ical');
@@ -342,7 +518,7 @@ test('validateJsonProperty reports actionable JSON errors', () => {
   );
   assert.throws(
     () => validateJsonProperty('REMINDER_MINUTES', '{"bad":true}', 'array'),
-    /Example: \[10080,2880,360\]/
+    /Example: \[10080,2880,1440,360,60\]/
   );
 });
 
